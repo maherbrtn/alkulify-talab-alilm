@@ -3,6 +3,7 @@ import { youtubeUrl } from '../lib/format'
 import { flash } from '../lib/toast'
 import { normalize } from '../lib/normalize'
 import { markMatches } from '../lib/mark'
+import { localLessonProgress } from '../lib/lesson-progress'
 
 type Props = { videoId: string; title: string }
 
@@ -11,6 +12,7 @@ type YTPlayer = {
   seekTo(seconds: number, allowSeekAhead: boolean): void
   playVideo(): void
   getCurrentTime(): number
+  getDuration(): number
   getIframe(): HTMLIFrameElement
 }
 
@@ -18,7 +20,7 @@ declare global {
   interface Window {
     YT?: {
       Player: new (el: HTMLElement, options: unknown) => YTPlayer
-      PlayerState: { PLAYING: number }
+      PlayerState: { PLAYING: number; PAUSED: number; ENDED: number }
     }
     onYouTubeIframeAPIReady?: () => void
   }
@@ -27,6 +29,9 @@ declare global {
 const API_SRC = 'https://www.youtube.com/iframe_api'
 /** Embedding disabled / removed by the uploader. */
 const EMBED_ERRORS = new Set([101, 150, 153])
+const SAVE_EVERY_SECONDS = 15
+const RESUME_AFTER_SECONDS = 10
+const COMPLETE_RATIO = 0.9
 
 let apiReady: Promise<NonNullable<Window['YT']>> | undefined
 
@@ -98,6 +103,28 @@ export default function Player({ videoId, title }: Props) {
     let cancelled = false
     let poll: ReturnType<typeof setInterval> | undefined
     let announce: ReturnType<typeof setTimeout> | undefined
+    let lastSavedAt = 0
+
+    const saveProgress = (forceCompleted = false) => {
+      const player = playerRef.current
+      const position = player?.getCurrentTime() ?? timeRef.current
+      const duration = player?.getDuration() ?? 0
+      if (!Number.isFinite(position) || !Number.isFinite(duration) || position <= 0 || duration <= 0)
+        return
+      const completed = forceCompleted || position / duration >= COMPLETE_RATIO
+      timeRef.current = completed ? duration : position
+      lastSavedAt = position
+      void localLessonProgress.save({
+        videoId,
+        positionSeconds: Math.max(0, Math.min(position, duration)),
+        durationSeconds: duration,
+        completed,
+        updatedAt: new Date().toISOString(),
+      })
+    }
+
+    const onPageHide = () => saveProgress()
+    addEventListener('pagehide', onPageHide)
 
     const setActive = (i: number) => {
       if (i === active) return
@@ -218,55 +245,75 @@ export default function Player({ videoId, title }: Props) {
     // and the reader can type into it before this island hydrates. Sync once either way.
     if (search?.value) onFilter()
 
-    const t = Math.max(0, Math.floor(Number(params.get('t')) || 0))
-    const from = indexAt(starts, t)
-    // `t` is only the start of an 83 s cue, so land on the first ~7 s segment at or after it
-    // that holds the query. Fall back to the first match anywhere — Meilisearch splits a
-    // leading `ال`, so the cue that scored can hold a word this literal match does not. With
-    // no match at all (or no `q`) `at` is -1 and `t` is honoured exactly as before.
-    const nq = normalize(query)
-    const matches = nq ? folded.flatMap((f, i) => (f.includes(nq) ? [i] : [])) : []
-    const at = matches.find((i) => i >= from) ?? matches[0] ?? -1
-    const start = at < 0 ? t : Math.floor(starts[at])
-    timeRef.current = start
-    setActive(at < 0 ? from : at)
-
-    loadApi().then((YT) => {
+    const explicitTime = params.has('t')
+    const urlTime = Math.max(0, Math.floor(Number(params.get('t')) || 0))
+    void Promise.resolve(localLessonProgress.get(videoId)).then((saved) => {
       if (cancelled || !hostRef.current) return
-      // The API replaces its target node with the iframe, so hand it a node React does not own.
-      const target = hostRef.current.appendChild(document.createElement('div'))
-      playerRef.current = new YT.Player(target, {
-        videoId,
-        host: 'https://www.youtube-nocookie.com',
-        width: '100%',
-        height: '100%',
-        playerVars: {
-          start,
-          autoplay: start ? 1 : 0,
-          hl: 'ar',
-          rel: 0,
-          playsinline: 1,
-          origin: location.origin,
-        },
-        events: {
-          onReady: (e: { target: YTPlayer }) => {
-            e.target.getIframe().title = title
+      const canResume =
+        !explicitTime &&
+        saved &&
+        !saved.completed &&
+        saved.positionSeconds >= RESUME_AFTER_SECONDS &&
+        (!saved.durationSeconds || saved.positionSeconds / saved.durationSeconds < COMPLETE_RATIO)
+      const t = canResume ? Math.floor(saved.positionSeconds) : urlTime
+      const from = indexAt(starts, t)
+      // `t` is only the start of an 83 s cue, so land on the first ~7 s segment at or after it
+      // that holds the query. Fall back to the first match anywhere — Meilisearch splits a
+      // leading `ال`, so the cue that scored can hold a word this literal match does not. With
+      // no match at all (or no `q`) `at` is -1 and `t` is honoured exactly as before.
+      const nq = normalize(query)
+      const matches = nq ? folded.flatMap((f, i) => (f.includes(nq) ? [i] : [])) : []
+      const at = matches.find((i) => i >= from) ?? matches[0] ?? -1
+      const start = at < 0 ? t : Math.floor(starts[at])
+      timeRef.current = start
+      setActive(at < 0 ? from : at)
+
+      loadApi().then((YT) => {
+        if (cancelled || !hostRef.current) return
+        // The API replaces its target node with the iframe, so hand it a node React does not own.
+        const target = hostRef.current.appendChild(document.createElement('div'))
+        playerRef.current = new YT.Player(target, {
+          videoId,
+          host: 'https://www.youtube-nocookie.com',
+          width: '100%',
+          height: '100%',
+          playerVars: {
+            start,
+            autoplay: start ? 1 : 0,
+            hl: 'ar',
+            rel: 0,
+            playsinline: 1,
+            origin: location.origin,
           },
-          onStateChange: (e: { data: number }) => {
-            clearInterval(poll)
-            if (e.data !== YT.PlayerState.PLAYING) return
-            // Follow playback: 500 ms is well under the ~9 s segment length.
-            poll = setInterval(() => {
-              const t = playerRef.current?.getCurrentTime()
-              if (typeof t !== 'number') return
-              timeRef.current = t
-              setActive(indexAt(starts, t))
-            }, 500)
+          events: {
+            onReady: (e: { target: YTPlayer }) => {
+              e.target.getIframe().title = title
+            },
+            onStateChange: (e: { data: number }) => {
+              clearInterval(poll)
+              if (e.data === YT.PlayerState.ENDED) {
+                saveProgress(true)
+                return
+              }
+              if (e.data === YT.PlayerState.PAUSED) {
+                saveProgress()
+                return
+              }
+              if (e.data !== YT.PlayerState.PLAYING) return
+              // Follow playback: 500 ms is well under the ~9 s segment length.
+              poll = setInterval(() => {
+                const t = playerRef.current?.getCurrentTime()
+                if (typeof t !== 'number') return
+                timeRef.current = t
+                setActive(indexAt(starts, t))
+                if (Math.abs(t - lastSavedAt) >= SAVE_EVERY_SECONDS) saveProgress()
+              }, 500)
+            },
+            onError: (e: { data: number }) => {
+              if (EMBED_ERRORS.has(e.data)) setBlocked(true)
+            },
           },
-          onError: (e: { data: number }) => {
-            if (EMBED_ERRORS.has(e.data)) setBlocked(true)
-          },
-        },
+        })
       })
     })
 
@@ -275,6 +322,8 @@ export default function Player({ videoId, title }: Props) {
       clearInterval(poll)
       clearTimeout(announce)
       clearTimeout(filterTimer)
+      removeEventListener('pagehide', onPageHide)
+      saveProgress()
       list.removeEventListener('click', onClick)
       search?.removeEventListener('input', onInput)
       try {
