@@ -1,7 +1,4 @@
 ---
-// Font CSS must be imported here, not @import-ed from global.css: Tailwind's Vite
-// plugin inlines @import without rewriting url(), which drops the woff2 files.
-import '@fontsource-variable/noto-naskh-arabic/wght.css'
 import '../styles/global.css'
 import { SITE, SHEIKH, HOME_TITLE } from '../lib/seo'
 import JsonLd from '../components/JsonLd.astro'
@@ -53,6 +50,10 @@ const social = [
     d: 'M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z',
   },
 ]
+// Square 44×44 targets in the header: the saved-pages link and the theme toggle.
+const icon =
+  'grid size-11 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-fg'
+
 const fullTitle = title ? `${title} — ${SITE}` : HOME_TITLE
 const base = Astro.site ?? Astro.url.origin
 const canonical = new URL(Astro.url.pathname, base).href
@@ -141,10 +142,29 @@ const ogSize = image === '/og.png' ? { w: '1200', h: '630' } : { w: '480', h: '3
             class="inline-flex h-11 items-center rounded-lg px-2 text-muted transition-colors hover:bg-surface-2 hover:text-fg"
             >تواصل</a
           >
+          <a
+            href="/saved/"
+            aria-label="المحفوظات"
+            title="المحفوظات"
+            class={icon}
+          >
+            <svg
+              class="size-5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </a>
           <button
             type="button"
             id="theme-toggle"
-            class="grid size-11 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+            class={icon}
             aria-pressed="false"
             aria-label="الوضع الداكن"
           >

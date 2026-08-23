@@ -1,6 +1,7 @@
 ---
 import Base from '../../layouts/Base.astro'
 import Actions from '../../components/Actions.astro'
+import Note from '../../components/Note.astro'
 import { allArticles, type Article } from '../../lib/data'
 import { arabicDate } from '../../lib/format'
 import { SITE, SITE_URL, person, breadcrumb } from '../../lib/seo'
@@ -53,13 +54,19 @@ const crumbs = breadcrumb([[article.title, `/a/${article.id}/`]])
   schema={[articleSchema, crumbs]}
 >
   <article class="pt-8">
-    <div class="flex flex-wrap items-center gap-2">
-      <span class="rounded-full bg-surface-2 px-3 py-1 text-xs text-muted">{kind}</span>
-      {
-        article.categories.map((c) => (
-          <span class="rounded-full bg-surface-2 px-3 py-1 text-xs text-muted">{c}</span>
-        ))
-      }
+    {/* Same row as a lesson: tags lead, the actions sit at the far end. items-center,
+        not items-start — these pills are half the height of the buttons beside them. */}
+    <div class="flex items-center gap-3">
+      <div class="flex min-w-0 flex-wrap items-center gap-2">
+        <span class="rounded-full bg-surface-2 px-3 py-1 text-xs text-muted">{kind}</span>
+        {
+          article.categories.map((c) => (
+            <span class="rounded-full bg-surface-2 px-3 py-1 text-xs text-muted">{c}</span>
+          ))
+        }
+      </div>
+
+      <Actions title={article.title} kind="a" class="ms-auto shrink-0" />
     </div>
 
     <h1 class="mt-4 text-xl font-semibold leading-relaxed sm:text-2xl">{article.title}</h1>
@@ -90,9 +97,7 @@ const crumbs = breadcrumb([[article.title, `/a/${article.id}/`]])
       >
     </div>
 
-    <Actions title={article.title} class="mt-4" />
-
-    <div class="prose-naskh mt-6 max-w-none space-y-4 text-fg">
+    <div class="prose-read mt-6 max-w-none space-y-4 text-fg">
       {
         /* Telegram posts are written *about* the screenshot above them — «الصورة في الأعلى» —
            so it leads the body, and it is not decorative. There is no caption to use as alt. */
@@ -110,5 +115,7 @@ const crumbs = breadcrumb([[article.title, `/a/${article.id}/`]])
       }
       {article.paragraphs.map((p, n) => <p id={`p${n}`} class="scroll-mt-20">{p}</p>)}
     </div>
+
+    <Note title={article.title} kind="a" />
   </article>
 </Base>
