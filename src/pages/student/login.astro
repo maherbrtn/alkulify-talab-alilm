@@ -1,0 +1,10 @@
+---
+import Base from '../../layouts/Base.astro'
+import StudentAuth from '../../islands/StudentAuth'
+---
+
+<Base title="حساب الطالب" description="تسجيل الدخول أو إنشاء حساب طالب." noindex>
+  <h1 class="mt-10 text-2xl font-semibold tracking-tight sm:text-3xl">حساب الطالب</h1>
+  <p class="mt-3 text-muted">أنشئ حسابًا أو سجل الدخول للوصول إلى ملفك الدراسي.</p>
+  <StudentAuth client:load />
+</Base>

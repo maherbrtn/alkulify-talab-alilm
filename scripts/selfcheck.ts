@@ -1,6 +1,6 @@
 /** `pnpm check` — the smallest thing that fails if the text plumbing breaks. */
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { client, highlight, peek, rateLimited, search } from '../src/lib/meili.ts'
 import { normalize } from '../src/lib/normalize.ts'
 import { clean, mergeSegments } from '../src/lib/clean.ts'
@@ -235,5 +235,28 @@ update('/v/x/', page, { note: undefined })
 assert.deepEqual(all(), {}) // nothing left to remember
 mem.set('kashaf:saved', '[1,2]') // a hand-mangled blob reads as empty, never as a crash
 assert.deepEqual(all(), {})
+
+// Student account pages stay static shells. The migration mirrors the already-hosted table,
+// and must never drift into a second competing profile model.
+for (const route of [
+  '../src/pages/student/login.astro',
+  '../src/pages/student/auth/callback.astro',
+  '../src/pages/student/index.astro',
+  '../src/pages/student/profile.astro',
+]) {
+  assert.ok(existsSync(new URL(route, import.meta.url)), `${route} is missing`)
+}
+const profilesSql = readFileSync(
+  new URL('../supabase/migrations/20260824000000_profiles.sql', import.meta.url),
+  'utf8',
+)
+assert.match(profilesSql, /create table if not exists public\.profiles/)
+assert.match(profilesSql, /alter table public\.profiles enable row level security/)
+assert.match(profilesSql, /revoke all on table public\.profiles from public/)
+assert.match(profilesSql, /function public\.set_updated_at\(\)/)
+assert.match(profilesSql, /trigger profiles_set_updated_at/)
+assert.match(profilesSql, /function public\.handle_new_user\(\)/)
+assert.match(profilesSql, /trigger on_auth_user_created/)
+assert.doesNotMatch(profilesSql, /student_profiles/)
 
 console.log('selfcheck ok')

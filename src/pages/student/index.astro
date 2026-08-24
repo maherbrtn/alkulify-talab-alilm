@@ -1,0 +1,10 @@
+---
+import Base from '../../layouts/Base.astro'
+import StudentHome from '../../islands/StudentHome'
+---
+
+<Base title="مساحة الطالب" description="مساحة الطالب الخاصة." noindex>
+  <h1 class="mt-10 text-2xl font-semibold tracking-tight sm:text-3xl">مساحة الطالب</h1>
+  <p class="mt-3 text-muted">ملفك الدراسي وإعدادات حسابك.</p>
+  <StudentHome client:load />
+</Base>
