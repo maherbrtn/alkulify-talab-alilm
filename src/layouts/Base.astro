@@ -1,7 +1,6 @@
 ---
 import '../styles/global.css'
 import { SITE, SHEIKH, HOME_TITLE } from '../lib/seo'
-import JsonLd from '../components/JsonLd.astro'
 
 interface Props {
   title?: string
@@ -60,6 +59,7 @@ const canonical = new URL(Astro.url.pathname, base).href
 const ogImage = new URL(image, base).href
 // Only the site card's dimensions are known ahead of time; YouTube thumbs are 480×360.
 const ogSize = image === '/og.png' ? { w: '1200', h: '630' } : { w: '480', h: '360' }
+const jsonLd = (data: Record<string, unknown>) => JSON.stringify(data).replaceAll('<', '\\u003c')
 ---
 
 <!doctype html>
@@ -93,7 +93,11 @@ const ogSize = image === '/og.png' ? { w: '1200', h: '630' } : { w: '480', h: '3
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
     <link rel="sitemap" href="/sitemap-index.xml" />
-    {schema.map((data) => <JsonLd data={data} />)}
+    {
+      schema.map((data) => (
+        <script type="application/ld+json" is:inline set:html={jsonLd(data)}></script>
+      ))
+    }
     <script is:inline>
       // Applied before first paint so the theme never flashes.
       try {
@@ -138,8 +142,13 @@ const ogSize = image === '/og.png' ? { w: '1200', h: '630' } : { w: '480', h: '3
             >المقالات</a
           >
           <a
-            href="/contact/"
+            href="/b/"
             class="inline-flex h-11 items-center rounded-lg px-2 text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+            >الكتب</a
+          >
+          <a
+            href="/contact/"
+            class="hidden h-11 items-center rounded-lg px-2 text-muted transition-colors hover:bg-surface-2 hover:text-fg sm:inline-flex"
             >تواصل</a
           >
           <a
@@ -292,11 +301,25 @@ const ogSize = image === '/og.png' ? { w: '1200', h: '630' } : { w: '480', h: '3
         toggle?.setAttribute('aria-pressed', String(document.documentElement.classList.contains('dark')))
       syncToggle()
       toggle?.addEventListener('click', () => {
-        const dark = document.documentElement.classList.toggle('dark')
-        syncToggle()
-        try {
-          localStorage.setItem('theme', dark ? 'dark' : 'light')
-        } catch {}
+        const flip = () => {
+          const dark = document.documentElement.classList.toggle('dark')
+          syncToggle()
+          try {
+            localStorage.setItem('theme', dark ? 'dark' : 'light')
+          } catch {}
+        }
+        // الدائرةُ تتّسع من مركز الزرّ؛ ومن لا يدعم الانتقالَ أو طلب سكونَ الحركة يبدّل فورًا.
+        if (!document.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          return flip()
+        }
+        const r = toggle.getBoundingClientRect()
+        const x = r.left + r.width / 2
+        const y = r.top + r.height / 2
+        const s = document.documentElement.style
+        s.setProperty('--wipe-x', x + 'px')
+        s.setProperty('--wipe-y', y + 'px')
+        s.setProperty('--wipe-r', Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y)) + 'px')
+        document.startViewTransition(flip)
       })
 
       // "/" focuses the page's search box, unless the user is already typing.

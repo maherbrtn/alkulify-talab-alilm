@@ -6,9 +6,7 @@ export type Video = {
   title: string
   duration: number
   uploadDate: string | null
-  channel: string
   playlists: { id: string; title: string; index: number }[]
-  source: string
   segmentCount: number
 }
 
@@ -36,6 +34,8 @@ export type Article = {
   modified: string | null
   categories: string[]
   url: string
+  /** Official PDF for book entries. */
+  download?: string
   paragraphs: string[]
   /** Telegram posts only; `w`/`h` are the intrinsic pixels, so the box is reserved before load. */
   images?: { src: string; w: number; h: number }[]
