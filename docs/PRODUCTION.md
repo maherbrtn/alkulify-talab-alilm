@@ -100,39 +100,23 @@ box if the IP leaks and someone goes around the edge.
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
         { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=()" },
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.youtube.com https://s.ytimg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com; font-src 'self'; connect-src 'self' https://search.assoli.site https://eu.i.posthog.com https://eu-assets.i.posthog.com; frame-src https://www.youtube-nocookie.com https://www.youtube.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'; upgrade-insecure-requests" }
+        { "key": "Content-Security-Policy", "value": "frame-ancestors 'none'" }
       ]
     }
   ]
 }
 ```
 
-`'unsafe-inline'` in `script-src` is forced by the `is:inline` theme scripts
-(`src/layouts/Base.astro:96`, `:269`, `src/pages/p/index.astro:78`). The real value in this
-header is `frame-ancestors 'none'`, `nosniff`, and `object-src 'none'`.
+Astro now owns the resource policy through `security.csp` and emits per-build script and style
+hashes in each HTML page. `vercel.json` keeps only `frame-ancestors 'none'`, which browsers
+ignore in a meta policy, alongside the non-CSP security headers.
 
-### Why not hash the inline scripts (declined, 2026-08-20)
-
-`experimental: { csp: true }` in `astro.config.mjs` would hash the inline scripts and let
-`'unsafe-inline'` go. Declined for now.
-
-The only hole `'unsafe-inline'` leaves is injected inline script, and this site has two HTML
-sinks — `highlight()` in `src/lib/meili.ts` and `markMatches()` in `src/lib/mark.ts`. Both
-escape `&<>` at the source and both carry an `<img src=x onerror=alert(1)>` assert in
-`scripts/selfcheck.ts`, which item 5's CI runs on every push. Article bodies from the Wayback
-corpus are never rendered raw; `src/pages/a/[id].astro` has no `set:html`. No server, no auth,
-no cookies once PostHog runs with `persistence: 'memory'`.
-
-Against that, the flag costs: it is experimental while Dependabot bumps Astro weekly, and a
-stale hash fails at runtime in the browser, not at build, so `pnpm build` will not catch it.
-It also splits the policy across a `<meta>` and this header, whose intersection is what the
-browser enforces. `frame-ancestors` is ignored in meta CSP, so `vercel.json` survives either
-way and no file is saved.
-
-Revisit when a new HTML sink appears — rendering article bodies as HTML to keep the WordPress
-bold and links is the likely one — not on a calendar. At that point the escape boundary stops
-being two tested functions and the hashes start earning their keep. Enabling it means setting
-the flag and deleting `script-src` and `style-src` from the header above.
+Executable `<script is:inline>` bodies bypass Vite and Astro does not hash them. The theme
+bootstrap therefore uses Astro's `head-inline` integration hook, which keeps it blocking and
+adds its hash to the generated policy. The other executable scripts use normal bundled
+`<script>` tags. JSON-LD and chart data keep their non-executable script types. Any new
+executable script must be bundled or injected through Astro, then tested with `astro build`
+and `astro preview`; otherwise the browser blocks it silently.
 
 ---
 
@@ -271,9 +255,19 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: node_modules/.astro
+          key: astro-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: astro-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: pnpm check
+      - run: pnpm test
       - run: pnpm build
 ```
+
+Astro 7.2's incremental build cache stores the previous dynamic pages under
+`node_modules/.astro`. Each video, playlist, article, and article-list page supplies a content
+digest, so CI restores unchanged HTML while data edits invalidate the affected pages.
 
 Without the CI, Dependabot is a liability rather than a help: `main` auto-deploys to Vercel in
 about 50 seconds.
@@ -284,7 +278,7 @@ about 50 seconds.
 
 ```json
 "build": "astro build && pnpm guard",
-"guard": "! grep -rql 'PUBLIC_MEILI_HOST:\"http://127.0.0.1:7700\"' dist/_astro || (echo 'PUBLIC_MEILI_HOST is still localhost — set the public one and rebuild' && false)",
+"guard": "(test -d dist/v || (echo 'dynamic routes are missing — check the build-time data path' && false)) && (! grep -rql 'PUBLIC_MEILI_HOST:\"http://127.0.0.1:7700\"' dist/_astro || (echo 'PUBLIC_MEILI_HOST is still localhost — set the public one and rebuild' && false))",
 ```
 
 The guard runs explicitly from `build`, so Vercel and CI cannot publish a bundle whose baked
@@ -304,8 +298,29 @@ deploy script has been removed.
 | 4. Analytics | done — `src/lib/analytics.ts`, silent unless `PUBLIC_POSTHOG_KEY` is set |
 | 5. Dependabot and CI | done — `.github/` |
 | 6. The build guard | done — `pnpm build` runs it explicitly |
+| 7. YouTube downloads | done in code — deploy the service and DNS below |
 
-All six items are done.
+---
+
+## 7. YouTube downloads
+
+The static site sends download jobs to `download.assoli.site`. The service uses the official
+`yt-dlp` nightly binary, updates on startup, and updates then retries once after a failed info or
+download command. FFmpeg merges video streams and extracts best-quality audio; playlists return
+as ZIP files.
+
+```bash
+docker compose up -d --build downloader
+sudo cp ops/Caddyfile /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+curl https://download.assoli.site/health
+```
+
+Create the `download` DNS record beside `search`, then set Vercel's
+`PUBLIC_DOWNLOAD_HOST=https://download.assoli.site`. The service only accepts YouTube video and
+playlist URLs, runs two jobs at once, and Caddy allows ten requests per minute per IP.
+
+All seven items are done in code. Item 7 still needs the deployment commands above.
 
 ## Deliberately skipped
 

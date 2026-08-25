@@ -1,21 +1,95 @@
 // @ts-check
-import { defineConfig } from 'astro/config'
+import { defineConfig, fontProviders } from 'astro/config'
 import react from '@astrojs/react'
 import sitemap from '@astrojs/sitemap'
 import tailwindcss from '@tailwindcss/vite'
+import { loadEnv } from 'vite'
+
+const env = { ...loadEnv(process.env.NODE_ENV ?? 'production', process.cwd(), ''), ...process.env }
+const downloadHost = env.PUBLIC_DOWNLOAD_HOST ?? 'https://download.assoli.site'
+const supabaseOrigins = (() => {
+  try {
+    const origin = new URL(env.PUBLIC_SUPABASE_URL ?? '').origin
+    return origin.startsWith('https://') ? `${origin} ${origin.replace('https://', 'wss://')}` : ''
+  } catch {
+    return ''
+  }
+})()
 
 export default defineConfig({
   site: 'https://alkulify.assoli.site',
   // Canonicals and the sitemap emit /path/ — keep dev and internal links on the same
   // form so Cloudflare Pages never has to 301 an internal hop.
   trailingSlash: 'always',
+  compressHTML: true,
+  experimental: { incrementalBuild: true },
+  fonts: [
+    {
+      provider: fontProviders.local(),
+      name: 'Thmanyah Sans',
+      cssVariable: '--font-thmanyah-sans',
+      fallbacks: ['ui-sans-serif', 'system-ui', 'sans-serif'],
+      options: {
+        variants: [
+          { src: ['./src/assets/fonts/thmanyahsans-Light.woff2'], weight: 300, style: 'normal' },
+          { src: ['./src/assets/fonts/thmanyahsans-Regular.woff2'], weight: 400, style: 'normal' },
+          { src: ['./src/assets/fonts/thmanyahsans-Medium.woff2'], weight: 500, style: 'normal' },
+          { src: ['./src/assets/fonts/thmanyahsans-Bold.woff2'], weight: 700, style: 'normal' },
+          { src: ['./src/assets/fonts/thmanyahsans-Black.woff2'], weight: 900, style: 'normal' },
+        ],
+      },
+    },
+  ],
+  security: {
+    csp: {
+      directives: [
+        "default-src 'self'",
+        "img-src 'self' data: https://i.ytimg.com",
+        "font-src 'self'",
+        `connect-src 'self' https://search.assoli.site https://eu.i.posthog.com https://eu-assets.i.posthog.com ${downloadHost} ${supabaseOrigins}`,
+        'frame-src https://www.youtube-nocookie.com https://www.youtube.com',
+        "base-uri 'none'",
+        `form-action 'self' ${downloadHost}`,
+        "object-src 'none'",
+        'upgrade-insecure-requests',
+      ],
+      scriptDirective: {
+        resources: [
+          { resource: "'self'", kind: 'element' },
+          { resource: 'https://www.youtube.com', kind: 'element' },
+          { resource: 'https://s.ytimg.com', kind: 'element' },
+          { resource: "'none'", kind: 'attribute' },
+        ],
+      },
+      styleDirective: {
+        resources: [
+          { resource: "'self'", kind: 'element' },
+          { resource: "'none'", kind: 'attribute' },
+        ],
+      },
+    },
+  },
   integrations: [
+    {
+      name: 'theme-bootstrap',
+      hooks: {
+        'astro:config:setup': ({ injectScript }) =>
+          injectScript(
+            'head-inline',
+            `try {
+  const saved = localStorage.getItem('theme')
+  const dark = saved ? saved === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches
+  document.documentElement.classList.toggle('dark', dark)
+} catch {}`,
+          ),
+      },
+    },
     react(),
     sitemap({
-      // /404 and /saved/ are the only pages that shouldn't be listed — /saved/ is an
-      // empty shell until localStorage fills it in. Everything else is indexable.
+      // Error pages, the client-only saved shell, and private student pages stay out of search.
       filter: (page) =>
-        !page.endsWith('/404/') && !page.endsWith('/saved/') && !page.includes('/student/'),
+        !['/404/', '/422/', '/500/', '/saved/'].some((path) => page.endsWith(path)) &&
+        !page.includes('/student/'),
       serialize: (item) => ({
         ...item,
         // Lesson pages are the long tail; the hubs are what we want crawled first.
@@ -23,6 +97,8 @@ export default defineConfig({
       }),
     }),
   ],
+  // The site has no Markdown routes, and Shiki's inline styles conflict with CSP.
+  markdown: { syntaxHighlight: false },
   vite: { plugins: [tailwindcss()] },
   build: { inlineStylesheets: 'auto' },
 })
