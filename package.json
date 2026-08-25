@@ -14,6 +14,7 @@
     "preview": "astro preview",
     "meili": "meilisearch --db-path ./data/meili/data.ms --master-key $MEILI_ADMIN_KEY --http-addr 127.0.0.1:7700 --env development",
     "data": "tsx --env-file-if-exists=.env scripts/build-data.ts",
+    "lesson-registry": "tsx scripts/sync-lesson-registry.ts",
     "articles": "tsx scripts/articles.ts",
     "telegram": "tsx scripts/telegram.ts",
     "index": "tsx --env-file-if-exists=.env scripts/index.ts",

@@ -145,7 +145,7 @@ const crumbs = breadcrumb([['القوائم', '/p/'], [video.title, `/v/${video.
       collapses), and under client:visible the observer never fires — the transcript would
       stay inert with no seek and no filter.
     -->
-    <Player client:load videoId={video.id} title={video.title} />
+    <Player client:load videoId={video.id} lessonKey={video.lessonKey} title={video.title} />
 
     <section aria-label="التفريغ" class="min-w-0">
       <div

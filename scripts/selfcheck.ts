@@ -8,7 +8,8 @@ import { chunk, decode, paragraphs, titleKey } from '../src/lib/html.ts'
 import { markMatches } from '../src/lib/mark.ts'
 import { timestamp, duration, arabicDate, lessons, hours, lists, articles, withDigits } from '../src/lib/format.ts'
 import { breadcrumb, mailto, CONTACT_EMAIL, SITE, SITE_URL } from '../src/lib/seo.ts'
-import { allArticles, contentDigest, playlists, playlistVideos } from '../src/lib/data.ts'
+import { allArticles, contentDigest, playlists, playlistVideos, videos } from '../src/lib/data.ts'
+import { validateLessonRegistry } from '../src/lib/lesson-registry.ts'
 import { all, update } from '../src/lib/store.ts'
 
 // highlight: escapes everything except <mark>, so a hostile transcript cannot inject HTML
@@ -205,6 +206,33 @@ for (const p of playlists) {
     `${p.title} is not oldest-first`,
   )
 }
+
+// Project-owned lesson identity stays outside the generated video snapshot. Every current source
+// record resolves exactly once, while malformed or ambiguous registry edits fail before a build.
+const registryValue: unknown = JSON.parse(
+  readFileSync(new URL('../data/lesson-registry.json', import.meta.url), 'utf8'),
+)
+const registry = validateLessonRegistry(registryValue, videos.map((video) => video.id))
+assert.ok(registry.lessons.length >= videos.length)
+assert.equal(new Set(videos.map((video) => video.lessonKey)).size, videos.length)
+const sample = registry.lessons[0]
+assert.throws(() =>
+  validateLessonRegistry({
+    version: 1,
+    lessons: [sample, { ...sample, youtube_video_id: `${sample.youtube_video_id}-duplicate` }],
+  }),
+)
+assert.throws(() =>
+  validateLessonRegistry({
+    version: 1,
+    lessons: [sample, { ...sample, lesson_key: '00000000-0000-4000-8000-000000000000' }],
+  }),
+)
+assert.throws(() => validateLessonRegistry({ version: 2, lessons: [] }))
+assert.throws(() => validateLessonRegistry({ version: 1, lessons: [sample] }, ['missing-video']))
+assert.doesNotThrow(() =>
+  validateLessonRegistry({ version: 1, lessons: [sample] }, []),
+)
 
 const corpus = allArticles()
 const books = corpus.filter(

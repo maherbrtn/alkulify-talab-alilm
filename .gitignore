@@ -4,6 +4,7 @@ data/*
 !data/eval-questions-2.json
 !data/eval-articles.json
 !data/domain-synonyms.json
+!data/lesson-registry.json
 !data/videos.json
 !data/playlists.json
 !data/segments/

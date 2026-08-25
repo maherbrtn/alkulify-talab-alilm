@@ -2,8 +2,9 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { lessonKeysByVideoId, validateLessonRegistry } from './lesson-registry'
 
-export type Video = {
+export type GeneratedVideo = {
   id: string
   title: string
   duration: number
@@ -11,6 +12,8 @@ export type Video = {
   playlists: { id: string; title: string; index: number }[]
   segmentCount: number
 }
+
+export type Video = GeneratedVideo & { lessonKey: string }
 
 export type Playlist = { id: string; title: string; videoIds: string[] }
 export type Segment = { s: number; e: number; t: string }
@@ -28,7 +31,16 @@ export const segmentsDigest = (id: string): string => {
   return hash(existsSync(file) ? readFileSync(file) : '[]')
 }
 
-export const videos: Video[] = read<Video[]>('videos.json', [])
+const generatedVideos = read<GeneratedVideo[]>('videos.json', [])
+const lessonRegistry = validateLessonRegistry(
+  read<unknown>('lesson-registry.json', null),
+  generatedVideos.map((video) => video.id),
+)
+const lessonKeyByVideoId = lessonKeysByVideoId(lessonRegistry)
+export const videos: Video[] = generatedVideos.map((video) => ({
+  ...video,
+  lessonKey: lessonKeyByVideoId.get(video.id)!,
+}))
 export const playlists: Playlist[] = read<Playlist[]>('playlists.json', [])
 
 export const videoById = new Map(videos.map((v) => [v.id, v]))

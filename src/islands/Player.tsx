@@ -5,7 +5,7 @@ import { normalize } from '../lib/normalize'
 import { markMatches } from '../lib/mark'
 import { localLessonProgress } from '../lib/lesson-progress'
 
-type Props = { videoId: string; title: string }
+type Props = { videoId: string; lessonKey: string; title: string }
 
 type YTPlayer = {
   destroy(): void
@@ -76,7 +76,7 @@ function indexAt(starts: number[], t: number): number {
  * transcript into the page a second time as island props, and re-rendering that many
  * rows on every keystroke is work no one asked for.
  */
-export default function Player({ videoId, title }: Props) {
+export default function Player({ videoId, lessonKey: _lessonKey, title }: Props) {
   const [blocked, setBlocked] = useState(false)
 
   const hostRef = useRef<HTMLDivElement>(null)

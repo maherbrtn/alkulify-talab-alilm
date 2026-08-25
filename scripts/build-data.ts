@@ -7,7 +7,7 @@ import { readdir, readFile, writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { clean, mergeSegments } from '../src/lib/clean.ts'
-import type { Playlist, Video } from '../src/lib/data.ts'
+import type { GeneratedVideo, Playlist } from '../src/lib/data.ts'
 
 const RAW_DIR = (process.env.RAW_DIR ?? '').replace(/^~/, homedir())
 if (!RAW_DIR) throw new Error('RAW_DIR is not set (see .env.example)')
@@ -45,7 +45,7 @@ async function main() {
   await rm(join(DATA, 'segments'), { recursive: true, force: true })
   await mkdir(join(DATA, 'segments'), { recursive: true })
 
-  const videos: Video[] = []
+  const videos: GeneratedVideo[] = []
   const playlists = new Map<string, { title: string; entries: { id: string; index: number }[] }>()
 
   for (const file of files) {
