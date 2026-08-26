@@ -294,4 +294,46 @@ assert.match(profilesSql, /function public\.handle_new_user\(\)/)
 assert.match(profilesSql, /trigger on_auth_user_created/)
 assert.doesNotMatch(profilesSql, /student_profiles/)
 
+// Lesson progress is cloud-owned by the authenticated student and mutation is RPC-only.
+// Keep the checks deliberately structural: they catch permission or merge-invariant drift
+// without requiring a local Supabase service during the static application selfcheck.
+const lessonProgressSql = readFileSync(
+  new URL('../supabase/migrations/20260826000000_lesson_progress.sql', import.meta.url),
+  'utf8',
+)
+assert.match(lessonProgressSql, /create table public\.lesson_progress/)
+assert.match(lessonProgressSql, /primary key \(user_id, lesson_key\)/)
+assert.match(lessonProgressSql, /alter table public\.lesson_progress enable row level security/)
+for (const policy of [
+  'lesson_progress_select_own',
+  'lesson_progress_insert_own',
+  'lesson_progress_update_own',
+]) {
+  assert.match(lessonProgressSql, new RegExp(`create policy "${policy}"`))
+}
+assert.match(lessonProgressSql, /revoke all on table public\.lesson_progress from anon/)
+assert.match(lessonProgressSql, /revoke all on table public\.lesson_progress from public/)
+assert.match(lessonProgressSql, /revoke all on table public\.lesson_progress from authenticated/)
+assert.match(lessonProgressSql, /grant select on table public\.lesson_progress to authenticated/)
+assert.doesNotMatch(lessonProgressSql, /grant (?:insert|update|delete)[^;]*lesson_progress/i)
+assert.doesNotMatch(lessonProgressSql, /create policy "[^"]*delete/i)
+assert.match(lessonProgressSql, /trigger lesson_progress_set_updated_at/)
+assert.match(lessonProgressSql, /execute function public\.set_updated_at\(\)/)
+assert.match(lessonProgressSql, /function public\.merge_lesson_progress\(/)
+assert.match(lessonProgressSql, /security definer\s+set search_path = ''/)
+assert.match(lessonProgressSql, /v_user_id uuid := auth\.uid\(\)/)
+assert.doesNotMatch(lessonProgressSql, /p_user_id/)
+assert.match(lessonProgressSql, /on conflict \(user_id, lesson_key\) do update/)
+assert.match(lessonProgressSql, /position_seconds = greatest\(/)
+assert.match(lessonProgressSql, /duration_seconds = greatest\(/)
+assert.match(lessonProgressSql, /completed = public\.lesson_progress\.completed or excluded\.completed/)
+assert.match(lessonProgressSql, /client_updated_at = greatest\(/)
+assert.match(
+  lessonProgressSql,
+  /if p_client_updated_at > now\(\) \+ interval '10 minutes' then/,
+)
+assert.match(lessonProgressSql, /trigger lesson_progress_reject_user_id_change/)
+assert.match(lessonProgressSql, /revoke all on function public\.merge_lesson_progress\([\s\S]*from anon/)
+assert.match(lessonProgressSql, /grant execute on function public\.merge_lesson_progress\([\s\S]*to authenticated/)
+
 console.log('selfcheck ok')
