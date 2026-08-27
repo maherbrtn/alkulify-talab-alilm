@@ -6,7 +6,6 @@ import tailwindcss from '@tailwindcss/vite'
 import { loadEnv } from 'vite'
 
 const env = { ...loadEnv(process.env.NODE_ENV ?? 'production', process.cwd(), ''), ...process.env }
-const downloadHost = env.PUBLIC_DOWNLOAD_HOST ?? 'https://download.assoli.site'
 const supabaseOrigins = (() => {
   try {
     const origin = new URL(env.PUBLIC_SUPABASE_URL ?? '').origin
@@ -46,10 +45,10 @@ export default defineConfig({
         "default-src 'self'",
         "img-src 'self' data: https://i.ytimg.com",
         "font-src 'self'",
-        `connect-src 'self' https://search.assoli.site https://eu.i.posthog.com https://eu-assets.i.posthog.com ${downloadHost} ${supabaseOrigins}`,
+        `connect-src 'self' https://search.assoli.site https://eu.i.posthog.com https://eu-assets.i.posthog.com ${supabaseOrigins}`,
         'frame-src https://www.youtube-nocookie.com https://www.youtube.com',
         "base-uri 'none'",
-        `form-action 'self' ${downloadHost}`,
+        "form-action 'self'",
         "object-src 'none'",
         'upgrade-insecure-requests',
       ],
