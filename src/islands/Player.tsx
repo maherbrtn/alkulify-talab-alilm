@@ -3,7 +3,7 @@ import { youtubeUrl } from '../lib/format'
 import { flash } from '../lib/toast'
 import { normalize } from '../lib/normalize'
 import { markMatches } from '../lib/mark'
-import { localLessonProgress } from '../lib/lesson-progress'
+import { lessonProgress } from '../lib/lesson-progress'
 
 type Props = { videoId: string; lessonKey: string; title: string }
 
@@ -76,7 +76,7 @@ function indexAt(starts: number[], t: number): number {
  * transcript into the page a second time as island props, and re-rendering that many
  * rows on every keystroke is work no one asked for.
  */
-export default function Player({ videoId, lessonKey: _lessonKey, title }: Props) {
+export default function Player({ videoId, lessonKey, title }: Props) {
   const [blocked, setBlocked] = useState(false)
 
   const hostRef = useRef<HTMLDivElement>(null)
@@ -84,6 +84,7 @@ export default function Player({ videoId, lessonKey: _lessonKey, title }: Props)
   const timeRef = useRef(0)
 
   useEffect(() => {
+    const progressStore = lessonProgress(videoId, lessonKey)
     const list = document.getElementById('cues') as HTMLOListElement | null
     const search = document.querySelector<HTMLInputElement>('[data-search-input]')
     const followBox = document.querySelector<HTMLInputElement>('[data-follow]')
@@ -114,7 +115,7 @@ export default function Player({ videoId, lessonKey: _lessonKey, title }: Props)
       const completed = forceCompleted || position / duration >= COMPLETE_RATIO
       timeRef.current = completed ? duration : position
       lastSavedAt = position
-      void localLessonProgress.save({
+      void progressStore.save({
         videoId,
         positionSeconds: Math.max(0, Math.min(position, duration)),
         durationSeconds: duration,
@@ -247,7 +248,7 @@ export default function Player({ videoId, lessonKey: _lessonKey, title }: Props)
 
     const explicitTime = params.has('t')
     const urlTime = Math.max(0, Math.floor(Number(params.get('t')) || 0))
-    void Promise.resolve(localLessonProgress.get(videoId)).then((saved) => {
+    void Promise.resolve(progressStore.get(videoId)).then((saved) => {
       if (cancelled || !hostRef.current) return
       const canResume =
         !explicitTime &&
@@ -331,7 +332,7 @@ export default function Player({ videoId, lessonKey: _lessonKey, title }: Props)
       } catch {}
       playerRef.current = null
     }
-  }, [videoId, title])
+  }, [videoId, lessonKey, title])
 
   return (
     <div className="sticky top-14 z-10 -mx-4 bg-bg px-4 pb-3 pt-2 lg:top-20 lg:mx-0 lg:px-0 lg:pt-0">

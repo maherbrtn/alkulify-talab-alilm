@@ -7,7 +7,18 @@ export type Profile = {
   updated_at: string
 }
 
-type Database = {
+export type LessonProgressRow = {
+  user_id: string
+  lesson_key: string
+  position_seconds: number
+  duration_seconds: number
+  completed: boolean
+  client_updated_at: string
+  created_at: string
+  updated_at: string
+}
+
+export type Database = {
   public: {
     Tables: {
       profiles: {
@@ -24,9 +35,44 @@ type Database = {
         }
         Relationships: []
       }
+      lesson_progress: {
+        Row: LessonProgressRow
+        Insert: {
+          user_id: string
+          lesson_key: string
+          position_seconds: number
+          duration_seconds: number
+          completed?: boolean
+          client_updated_at: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          user_id?: string
+          lesson_key?: string
+          position_seconds?: number
+          duration_seconds?: number
+          completed?: boolean
+          client_updated_at?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: Record<string, never>
-    Functions: Record<string, never>
+    Functions: {
+      merge_lesson_progress: {
+        Args: {
+          p_lesson_key: string
+          p_position_seconds: number
+          p_duration_seconds: number
+          p_completed: boolean
+          p_client_updated_at: string
+        }
+        Returns: LessonProgressRow
+      }
+    }
     Enums: Record<string, never>
     CompositeTypes: Record<string, never>
   }

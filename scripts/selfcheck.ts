@@ -10,6 +10,10 @@ import { timestamp, duration, arabicDate, lessons, hours, lists, articles, withD
 import { breadcrumb, mailto, CONTACT_EMAIL, SITE, SITE_URL } from '../src/lib/seo.ts'
 import { allArticles, contentDigest, playlists, playlistVideos, videos } from '../src/lib/data.ts'
 import { validateLessonRegistry } from '../src/lib/lesson-registry.ts'
+import {
+  createSessionAwareLessonProgress,
+  type LessonProgress,
+} from '../src/lib/lesson-progress.ts'
 import { all, update } from '../src/lib/store.ts'
 
 // highlight: escapes everything except <mark>, so a hostile transcript cannot inject HTML
@@ -270,6 +274,133 @@ update('/v/x/', page, { note: undefined })
 assert.deepEqual(all(), {}) // nothing left to remember
 mem.set('kashaf:saved', '[1,2]') // a hand-mangled blob reads as empty, never as a crash
 assert.deepEqual(all(), {})
+
+// Lesson progress chooses local storage without auth, translates videoId -> lesson_key for cloud,
+// and keeps the exact local version until the monotonic RPC confirms it. Fakes make the migration
+// and write race deterministic without requiring a hosted Supabase project in the static check.
+const progress = (videoId: string, position: number, updatedAt: string): LessonProgress => ({
+  videoId,
+  positionSeconds: position,
+  durationSeconds: 100,
+  completed: position >= 90,
+  updatedAt,
+})
+const memoryProgress = () => {
+  const values = new Map<string, LessonProgress>()
+  return {
+    values,
+    store: {
+      get: (videoId: string) => values.get(videoId) ?? null,
+      save: (value: LessonProgress) => void values.set(value.videoId, value),
+      remove: (videoId: string, expectedUpdatedAt: string) => {
+        if (values.get(videoId)?.updatedAt === expectedUpdatedAt) values.delete(videoId)
+      },
+    },
+  }
+}
+
+{
+  const local = memoryProgress()
+  let cloudCalls = 0
+  const store = createSessionAwareLessonProgress({
+    videoId: 'video-anon',
+    lessonKey: '11111111-1111-4111-8111-111111111111',
+    getUserId: async () => null,
+    local: local.store,
+    cloud: {
+      get: async () => (++cloudCalls, null),
+      merge: async (_key, value) => (++cloudCalls, value),
+    },
+  })
+  await store.save(progress('video-anon', 20, '2026-08-27T00:00:00.000Z'))
+  assert.equal((await store.get('video-anon'))?.positionSeconds, 20)
+  assert.equal(cloudCalls, 0)
+}
+
+{
+  const local = memoryProgress()
+  const beforeSignIn = progress('video-auth', 35, '2026-08-27T00:01:00.000Z')
+  local.values.set(beforeSignIn.videoId, beforeSignIn)
+  const mergedKeys: string[] = []
+  const readKeys: string[] = []
+  const lessonKey = '22222222-2222-4222-8222-222222222222'
+  const store = createSessionAwareLessonProgress({
+    videoId: beforeSignIn.videoId,
+    lessonKey,
+    getUserId: async () => 'student-1',
+    local: local.store,
+    cloud: {
+      get: async (key) => {
+        readKeys.push(key)
+        return progress('', 40, '2026-08-27T00:02:00.000Z')
+      },
+      merge: async (key, value) => {
+        mergedKeys.push(key)
+        return { ...value, positionSeconds: 40 }
+      },
+    },
+  })
+  assert.deepEqual(await store.get(beforeSignIn.videoId), {
+    ...beforeSignIn,
+    positionSeconds: 40,
+  })
+  assert.deepEqual(mergedKeys, [lessonKey])
+  assert.equal(local.values.has(beforeSignIn.videoId), false)
+  assert.equal((await store.get(beforeSignIn.videoId))?.videoId, beforeSignIn.videoId)
+  assert.deepEqual(mergedKeys, [lessonKey]) // no second migration after confirmed removal
+  assert.deepEqual(readKeys, [lessonKey])
+}
+
+{
+  const local = memoryProgress()
+  const offline = progress('video-offline', 50, '2026-08-27T00:03:00.000Z')
+  local.values.set(offline.videoId, offline)
+  const store = createSessionAwareLessonProgress({
+    videoId: offline.videoId,
+    lessonKey: '33333333-3333-4333-8333-333333333333',
+    getUserId: async () => 'student-1',
+    local: local.store,
+    cloud: {
+      get: async () => null,
+      merge: async () => {
+        throw new Error('offline')
+      },
+    },
+  })
+  assert.deepEqual(await store.get(offline.videoId), offline)
+  assert.deepEqual(local.values.get(offline.videoId), offline)
+}
+
+{
+  const local = memoryProgress()
+  let releaseFirst!: () => void
+  const firstCloudWrite = new Promise<void>((resolve) => {
+    releaseFirst = resolve
+  })
+  let calls = 0
+  const store = createSessionAwareLessonProgress({
+    videoId: 'video-race',
+    lessonKey: '44444444-4444-4444-8444-444444444444',
+    getUserId: async () => 'student-1',
+    local: local.store,
+    cloud: {
+      get: async () => null,
+      merge: async (_key, value) => {
+        if (++calls === 1) await firstCloudWrite
+        else throw new Error('second write offline')
+        return value
+      },
+    },
+  })
+  const older = progress('video-race', 60, '2026-08-27T00:04:00.000Z')
+  const newer = progress('video-race', 75, '2026-08-27T00:05:00.000Z')
+  const first = store.save(older)
+  const second = store.save(newer)
+  assert.deepEqual(local.values.get('video-race'), newer)
+  releaseFirst()
+  await Promise.all([first, second])
+  assert.deepEqual(local.values.get('video-race'), newer)
+}
 
 // Student account pages stay static shells. The migration mirrors the already-hosted table,
 // and must never drift into a second competing profile model.
