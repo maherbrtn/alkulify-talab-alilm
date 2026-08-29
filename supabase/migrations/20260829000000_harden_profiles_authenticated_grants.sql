@@ -1,0 +1,3 @@
+REVOKE MAINTAIN, REFERENCES, TRIGGER, TRUNCATE
+ON TABLE public.profiles
+FROM authenticated;
