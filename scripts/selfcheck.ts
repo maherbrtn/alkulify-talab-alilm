@@ -23,6 +23,11 @@ import {
   type StudentProgressRow,
 } from '../src/lib/student-progress.ts'
 import {
+  decodeStudentLessonCatalog,
+  fetchStudentLessonCatalog,
+  StudentLessonCatalogError,
+} from '../src/lib/student-lesson-catalog.ts'
+import {
   GET as getLessonCatalog,
   lessonCatalog,
 } from '../src/pages/student/lesson-catalog.json.ts'
@@ -645,6 +650,92 @@ assert.doesNotMatch(
   /duration|playlist|description|thumbnail|provenance|user|progress|supabase|auth|localStorage|fetch\s*\(/i,
 )
 assert.doesNotMatch(lessonCatalogSource, /prerender\s*=\s*false|node:|\.from\(|\.rpc\s*\(/)
+
+// The browser decoder treats the compact public catalog as untrusted input: every tuple must be
+// valid, identities stay exact and unique, and one malformed entry rejects the whole response.
+{
+  const input = Object.freeze([
+    Object.freeze(['lesson-1', 'video-1', '  Exact title  ']),
+    Object.freeze(['lesson-2', 'video-2', '']),
+  ])
+  const before = JSON.stringify(input)
+  assert.deepEqual(decodeStudentLessonCatalog(input), [
+    { lessonKey: 'lesson-1', videoId: 'video-1', title: '  Exact title  ' },
+    { lessonKey: 'lesson-2', videoId: 'video-2', title: '' },
+  ])
+  assert.equal(JSON.stringify(input), before)
+}
+assert.deepEqual(decodeStudentLessonCatalog([]), [])
+
+const schemaFailure = (value: unknown) =>
+  assert.throws(
+    () => decodeStudentLessonCatalog(value),
+    (error) => error instanceof StudentLessonCatalogError && error.code === 'schema',
+  )
+schemaFailure({})
+schemaFailure([{}])
+schemaFailure([['lesson', 'video']])
+schemaFailure([['lesson', 'video', 'title', 'extra']])
+schemaFailure([['', 'video', 'title']])
+schemaFailure([[1, 'video', 'title']])
+schemaFailure([['lesson', '', 'title']])
+schemaFailure([['lesson', 1, 'title']])
+schemaFailure([['lesson', 'video', 1]])
+schemaFailure([
+  ['duplicate', 'video-1', 'First'],
+  ['duplicate', 'video-2', 'Second'],
+])
+schemaFailure([
+  ['valid', 'video', 'Valid'],
+  ['invalid', 'video'],
+])
+
+// A tiny injected fetcher verifies the four load-failure classes without network access.
+{
+  let requestedPath = ''
+  const rows = await fetchStudentLessonCatalog(async (path) => {
+    requestedPath = path
+    return new Response(JSON.stringify([['lesson', 'video', 'Title']]))
+  })
+  assert.equal(requestedPath, '/student/lesson-catalog.json')
+  assert.deepEqual(rows, [{ lessonKey: 'lesson', videoId: 'video', title: 'Title' }])
+}
+assert.deepEqual(
+  await fetchStudentLessonCatalog(async () => new Response(JSON.stringify([]))),
+  [],
+)
+await assert.rejects(
+  fetchStudentLessonCatalog(async () => {
+    throw new Error('offline')
+  }),
+  (error) => error instanceof StudentLessonCatalogError && error.code === 'network',
+)
+await assert.rejects(
+  fetchStudentLessonCatalog(async () => new Response('', { status: 503 })),
+  (error) => error instanceof StudentLessonCatalogError && error.code === 'http',
+)
+await assert.rejects(
+  fetchStudentLessonCatalog(async () => new Response('{', { status: 500 })),
+  (error) => error instanceof StudentLessonCatalogError && error.code === 'http',
+)
+await assert.rejects(
+  fetchStudentLessonCatalog(async () => new Response('{')),
+  (error) => error instanceof StudentLessonCatalogError && error.code === 'json',
+)
+await assert.rejects(
+  fetchStudentLessonCatalog(async () => new Response(JSON.stringify([['bad']]))),
+  (error) => error instanceof StudentLessonCatalogError && error.code === 'schema',
+)
+
+const studentLessonCatalogSource = readFileSync(
+  new URL('../src/lib/student-lesson-catalog.ts', import.meta.url),
+  'utf8',
+)
+assert.match(studentLessonCatalogSource, /'\/student\/lesson-catalog\.json'/)
+assert.doesNotMatch(
+  studentLessonCatalogSource,
+  /supabase|service_role|auth|session|localStorage|https?:\/\/|react|astro|player|node:|\.from\(|\.rpc\s*\(/i,
+)
 
 // Student account pages stay static shells. The migration mirrors the already-hosted table,
 // and must never drift into a second competing profile model.
