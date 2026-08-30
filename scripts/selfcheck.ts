@@ -22,6 +22,10 @@ import {
   type StudentLessonMetadata,
   type StudentProgressRow,
 } from '../src/lib/student-progress.ts'
+import {
+  GET as getLessonCatalog,
+  lessonCatalog,
+} from '../src/pages/student/lesson-catalog.json.ts'
 import { all, update } from '../src/lib/store.ts'
 
 // highlight: escapes everything except <mark>, so a hostile transcript cannot inject HTML
@@ -608,6 +612,39 @@ assert.doesNotMatch(
   studentProgressCloudSource,
   /user_id|service_role|SUPABASE_SERVICE_ROLE_KEY|localStorage|fetch\s*\(|\.auth\./,
 )
+
+// The public Student Area catalog is a build-time projection of every validated current lesson.
+// Tuples keep the artifact compact while their three fixed positions remain explicit and testable.
+const lessonCatalogRoute = new URL(
+  '../src/pages/student/lesson-catalog.json.ts',
+  import.meta.url,
+)
+assert.ok(existsSync(lessonCatalogRoute), 'student lesson catalog route is missing')
+assert.equal(lessonCatalog.length, videos.length)
+assert.equal(new Set(lessonCatalog.map(([lessonKey]) => lessonKey)).size, lessonCatalog.length)
+for (const [index, entry] of lessonCatalog.entries()) {
+  assert.equal(entry.length, 3)
+  assert.ok(entry[0])
+  assert.ok(entry[1])
+  assert.equal(typeof entry[2], 'string')
+  assert.deepEqual(entry, [videos[index].lessonKey, videos[index].id, videos[index].title])
+}
+
+const lessonCatalogResponse = await getLessonCatalog({} as never)
+assert.ok(lessonCatalogResponse instanceof Response)
+assert.equal(lessonCatalogResponse.headers.get('content-type'), 'application/json')
+const parsedLessonCatalog: unknown = await lessonCatalogResponse.json()
+assert.deepEqual(parsedLessonCatalog, lessonCatalog)
+assert.equal((parsedLessonCatalog as unknown[]).length, videos.length)
+
+const lessonCatalogSource = readFileSync(lessonCatalogRoute, 'utf8')
+assert.match(lessonCatalogSource, /import \{ videos \} from '\.\.\/\.\.\/lib\/data'/)
+assert.match(lessonCatalogSource, /videos\.map\(/)
+assert.doesNotMatch(
+  lessonCatalogSource,
+  /duration|playlist|description|thumbnail|provenance|user|progress|supabase|auth|localStorage|fetch\s*\(/i,
+)
+assert.doesNotMatch(lessonCatalogSource, /prerender\s*=\s*false|node:|\.from\(|\.rpc\s*\(/)
 
 // Student account pages stay static shells. The migration mirrors the already-hosted table,
 // and must never drift into a second competing profile model.
