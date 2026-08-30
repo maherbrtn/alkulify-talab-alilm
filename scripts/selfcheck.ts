@@ -14,6 +14,14 @@ import {
   createSessionAwareLessonProgress,
   type LessonProgress,
 } from '../src/lib/lesson-progress.ts'
+import {
+  deriveStudentProgress,
+  studentDisplayPercentage,
+  studentEffectiveResumeSeconds,
+  studentLessonHref,
+  type StudentLessonMetadata,
+  type StudentProgressRow,
+} from '../src/lib/student-progress.ts'
 import { all, update } from '../src/lib/store.ts'
 
 // highlight: escapes everything except <mark>, so a hostile transcript cannot inject HTML
@@ -400,6 +408,179 @@ const memoryProgress = () => {
   releaseFirst()
   await Promise.all([first, second])
   assert.deepEqual(local.values.get('video-race'), newer)
+}
+
+// Student Area Slice 1 is pure: rows arrive in descending activity order, metadata resolution
+// preserves that order, and only known rows can become Continue or occupy the eight Recent slots.
+const studentRow = (
+  lessonKey: string,
+  positionSeconds: number,
+  durationSeconds: number,
+  completed: boolean,
+  order = 0,
+): StudentProgressRow => ({
+  lesson_key: lessonKey,
+  position_seconds: positionSeconds,
+  duration_seconds: durationSeconds,
+  completed,
+  client_updated_at: `2026-08-30T00:${String(order).padStart(2, '0')}:00.000Z`,
+})
+const studentMetadata = (lessonKey: string): StudentLessonMetadata => ({
+  lessonKey,
+  videoId: `video-${lessonKey}`,
+  title: `Lesson ${lessonKey}`,
+})
+
+// Empty inputs and missing metadata produce explicit, benign empty states.
+assert.deepEqual(deriveStudentProgress([], [studentMetadata('unused')]), {
+  knownLessons: [],
+  continueLesson: null,
+  recentLessons: [],
+  unknownRowCount: 0,
+})
+assert.deepEqual(
+  deriveStudentProgress(
+    [studentRow('unknown-1', 1, 10, false), studentRow('unknown-2', 2, 10, true)],
+    [],
+  ),
+  {
+    knownLessons: [],
+    continueLesson: null,
+    recentLessons: [],
+    unknownRowCount: 2,
+  },
+)
+
+// A short known list is neither padded nor reordered, and metadata is projected exactly.
+{
+  const metadata = [
+    { lessonKey: 'short-1', videoId: 'exact-video-1', title: '  Exact title  ' },
+    { lessonKey: 'short-2', videoId: 'exact-video-2', title: 'Second' },
+    { lessonKey: 'short-3', videoId: 'exact-video-3', title: 'Third' },
+  ]
+  const result = deriveStudentProgress(
+    [
+      studentRow('short-1', 1, 10, false),
+      studentRow('short-2', 2, 10, false),
+      studentRow('short-3', 3, 10, false),
+    ],
+    metadata,
+  )
+  assert.equal(result.recentLessons.length, 3)
+  assert.deepEqual(result.recentLessons.map((lesson) => lesson.lessonKey), [
+    'short-1',
+    'short-2',
+    'short-3',
+  ])
+  assert.deepEqual(
+    {
+      lessonKey: result.knownLessons[0].lessonKey,
+      videoId: result.knownLessons[0].videoId,
+      title: result.knownLessons[0].title,
+    },
+    metadata[0],
+  )
+}
+
+// 1. The newest known incomplete row becomes Continue.
+{
+  const result = deriveStudentProgress(
+    [studentRow('newest', 12, 100, false), studentRow('older', 20, 100, false)],
+    [studentMetadata('newest'), studentMetadata('older')],
+  )
+  assert.equal(result.continueLesson?.lessonKey, 'newest')
+}
+
+// 2–5, 16–18. Completed and unknown rows do not hide Continue or consume Recent slots;
+// resolution preserves supplied order, reports unknowns, caps Recent, and leaves inputs untouched.
+{
+  const keys = ['done-1', 'done-2', 'done-3', 'done-4', 'done-5', 'continue', 'done-6', 'done-7', 'done-8', 'later']
+  const rows: readonly StudentProgressRow[] = Object.freeze([
+    Object.freeze(studentRow('done-1', 90, 100, true, 19)),
+    Object.freeze(studentRow('stale-a', 1, 10, false, 18)),
+    Object.freeze(studentRow('done-2', 90, 100, true, 17)),
+    Object.freeze(studentRow('done-3', 90, 100, true, 16)),
+    Object.freeze(studentRow('stale-b', 2, 10, false, 15)),
+    Object.freeze(studentRow('done-4', 90, 100, true, 14)),
+    Object.freeze(studentRow('done-5', 90, 100, true, 13)),
+    Object.freeze(studentRow('continue', 45, 100, false, 12)),
+    Object.freeze(studentRow('done-6', 90, 100, true, 11)),
+    Object.freeze(studentRow('done-7', 90, 100, true, 10)),
+    Object.freeze(studentRow('done-8', 90, 100, true, 9)),
+    Object.freeze(studentRow('later', 5, 100, false, 8)),
+  ])
+  const metadata: readonly StudentLessonMetadata[] = Object.freeze(
+    keys.map((key) => Object.freeze(studentMetadata(key))),
+  )
+  const rowsBefore = JSON.stringify(rows)
+  const metadataBefore = JSON.stringify(metadata)
+
+  const result = deriveStudentProgress(rows, metadata)
+
+  assert.equal(result.continueLesson?.lessonKey, 'continue')
+  assert.deepEqual(result.knownLessons.map((lesson) => lesson.lessonKey), keys)
+  assert.deepEqual(result.recentLessons.map((lesson) => lesson.lessonKey), keys.slice(0, 8))
+  assert.equal(result.recentLessons.length, 8)
+  assert.equal(result.unknownRowCount, 2)
+  assert.equal(JSON.stringify(rows), rowsBefore)
+  assert.equal(JSON.stringify(metadata), metadataBefore)
+}
+
+// 6. A collection containing only completed known rows has no Continue lesson.
+{
+  const result = deriveStudentProgress(
+    [studentRow('complete', 10, 100, true)],
+    [studentMetadata('complete')],
+  )
+  assert.equal(result.continueLesson, null)
+}
+
+// 7–12. Display percentage and effective resume values follow the V1 defensive rules.
+assert.equal(studentDisplayPercentage(studentRow('completed', 20, 100, true)), 100)
+assert.equal(studentDisplayPercentage(studentRow('normal', 45, 90, false)), 50)
+assert.equal(studentDisplayPercentage(studentRow('rounded', 1, 3, false)), 33)
+assert.equal(studentDisplayPercentage(studentRow('over', 150, 100, false)), 100)
+assert.equal(studentDisplayPercentage(studentRow('zero-duration', 10, 0, false)), null)
+assert.equal(studentEffectiveResumeSeconds(studentRow('over', 150, 100, false)), 100)
+
+// 13–15. Resume URLs floor positive positions, omit zero, and always restart completed Recent rows.
+assert.equal(studentLessonHref('fractional', false, 42.9), '/v/fractional/?t=42')
+assert.equal(studentLessonHref('zero', false, 0), '/v/zero/')
+assert.equal(studentLessonHref('completed', true, 70), '/v/completed/')
+assert.equal(studentLessonHref('x', false, Number.NaN), '/v/x/')
+assert.equal(studentLessonHref('x', false, Infinity), '/v/x/')
+assert.equal(studentLessonHref('x', false, -1), '/v/x/')
+
+// Completed lessons restart through the real projection, while an exact-duration incomplete row
+// remains incomplete and resumes at the duration boundary.
+{
+  const result = deriveStudentProgress(
+    [studentRow('completed-derived', 70, 100, true)],
+    [{ lessonKey: 'completed-derived', videoId: 'completed-video', title: 'Completed' }],
+  )
+  const recent = result.recentLessons[0]
+  assert.equal(recent.completed, true)
+  assert.equal(recent.href, '/v/completed-video/')
+  assert.ok(!recent.href.includes('?t='))
+}
+{
+  const result = deriveStudentProgress(
+    [studentRow('exact-duration', 120, 120, false)],
+    [{ lessonKey: 'exact-duration', videoId: 'exact-duration-video', title: 'Exact duration' }],
+  )
+  const lesson = result.knownLessons[0]
+  assert.equal(lesson.completed, false)
+  assert.equal(lesson.displayPercentage, 100)
+  assert.equal(lesson.effectiveResumeSeconds, 120)
+  assert.equal(lesson.href, '/v/exact-duration-video/?t=120')
+}
+
+// 19. An unexpected negative runtime position cannot create a negative resume URL.
+{
+  const row = studentRow('negative', -12.5, 100, false)
+  const effective = studentEffectiveResumeSeconds(row)
+  assert.equal(effective, 0)
+  assert.equal(studentLessonHref('negative', false, effective), '/v/negative/')
 }
 
 // Student account pages stay static shells. The migration mirrors the already-hosted table,
