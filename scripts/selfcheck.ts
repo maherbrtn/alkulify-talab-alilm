@@ -583,6 +583,32 @@ assert.equal(studentLessonHref('x', false, -1), '/v/x/')
   assert.equal(studentLessonHref('negative', false, effective), '/v/negative/')
 }
 
+// The Student Area cloud read stays a deliberately tiny RLS-bound query. Static assertions avoid
+// a network call and a large fake for Supabase's fluent PostgREST types while pinning its contract.
+const studentProgressCloudSource = readFileSync(
+  new URL('../src/lib/student-progress-cloud.ts', import.meta.url),
+  'utf8',
+)
+assert.match(studentProgressCloudSource, /\.from\('lesson_progress'\)/)
+assert.match(
+  studentProgressCloudSource,
+  /'lesson_key,position_seconds,duration_seconds,completed,client_updated_at'/,
+)
+assert.match(studentProgressCloudSource, /\.select\(STUDENT_PROGRESS_COLUMNS\)/)
+assert.match(
+  studentProgressCloudSource,
+  /\.order\('client_updated_at', \{ ascending: false \}\)/,
+)
+assert.match(studentProgressCloudSource, /if \(error\) throw error\s+return data/)
+assert.doesNotMatch(studentProgressCloudSource, /\.limit\s*\(/)
+assert.doesNotMatch(studentProgressCloudSource, /\.range\s*\(/)
+assert.doesNotMatch(studentProgressCloudSource, /\.(?:eq|neq|in|is|filter|match)\s*\(/)
+assert.doesNotMatch(studentProgressCloudSource, /\.(?:insert|update|upsert|delete|rpc)\s*\(/)
+assert.doesNotMatch(
+  studentProgressCloudSource,
+  /user_id|service_role|SUPABASE_SERVICE_ROLE_KEY|localStorage|fetch\s*\(|\.auth\./,
+)
+
 // Student account pages stay static shells. The migration mirrors the already-hosted table,
 // and must never drift into a second competing profile model.
 for (const route of [
