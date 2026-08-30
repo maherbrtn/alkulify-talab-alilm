@@ -737,6 +737,46 @@ assert.doesNotMatch(
   /supabase|service_role|auth|session|localStorage|https?:\/\/|react|astro|player|node:|\.from\(|\.rpc\s*\(/i,
 )
 
+// StudentHome verifies the persisted account before entering one retryable data pipeline. The
+// empty cloud result returns before the catalog boundary, and rendering consumes only derived
+// view-model links rather than rebuilding progress or resume behavior in the island.
+const studentHomeSource = readFileSync(
+  new URL('../src/islands/StudentHome.tsx', import.meta.url),
+  'utf8',
+)
+assert.match(studentHomeSource, /import \{ readStudentProgress \} from '\.\.\/lib\/student-progress-cloud'/)
+assert.match(studentHomeSource, /import \{ fetchStudentLessonCatalog \} from '\.\.\/lib\/student-lesson-catalog'/)
+assert.match(
+  studentHomeSource,
+  /import \{\s+deriveStudentProgress,\s+type StudentProgressRow,\s+type StudentProgressViewModel,\s+\} from '\.\.\/lib\/student-progress'/,
+)
+assert.match(
+  studentHomeSource,
+  /client\.auth\.getSession\(\)[\s\S]*client\.auth\.getUser\(\)[\s\S]*if \(authError \|\| !verified\.user\)[\s\S]*await loadStudentArea\(\)/,
+)
+assert.match(
+  studentHomeSource,
+  /if \(event === 'SIGNED_OUT'\) \{\s+loadRequest\.current\+\+\s+location\.replace\('\/student\/login\/'\)/,
+)
+assert.match(
+  studentHomeSource,
+  /rows = await readStudentProgress\(\)[\s\S]*if \(rows\.length === 0\) \{[\s\S]*setAreaState\(\{ status: 'empty' \}\)[\s\S]*return[\s\S]*\}[\s\S]*await fetchStudentLessonCatalog\(\)/,
+)
+assert.match(studentHomeSource, /studentProgress: deriveStudentProgress\(rows, metadata\)/)
+assert.match(studentHomeSource, /href=\{studentProgress\.continueLesson\.href\}/)
+assert.match(studentHomeSource, /href=\{lesson\.href\}/)
+assert.doesNotMatch(studentHomeSource, /localStorage/)
+assert.doesNotMatch(studentHomeSource, /\.from\s*\(/)
+assert.doesNotMatch(studentHomeSource, /fetch\s*\(|['"]\/student\/lesson-catalog\.json/)
+assert.doesNotMatch(studentHomeSource, /\?t=|['"]\/v\//)
+assert.doesNotMatch(studentHomeSource, /playlists?|courses?|study paths?|totalProgress|overallProgress|مسار|دورة/i)
+assert.match(studentHomeSource, /href="\/student\/profile\/"/)
+assert.match(studentHomeSource, /\.auth\.signOut\(\)/)
+assert.equal(
+  studentHomeSource.match(/بعض سجلات التقدم مرتبطة بدروس لم تعد متاحة حاليًا\./g)?.length,
+  1,
+)
+
 // Student account pages stay static shells. The migration mirrors the already-hosted table,
 // and must never drift into a second competing profile model.
 for (const route of [
