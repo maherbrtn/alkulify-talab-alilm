@@ -11,6 +11,9 @@ export type LessonRegistry = {
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
+export const isUuidV4 = (value: unknown): value is string =>
+  typeof value === 'string' && UUID_V4.test(value)
+
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 
@@ -29,7 +32,7 @@ export function validateLessonRegistry(
 
     const lessonKey = entry.lesson_key
     const sourceId = entry.youtube_video_id
-    if (typeof lessonKey !== 'string' || !UUID_V4.test(lessonKey)) {
+    if (!isUuidV4(lessonKey)) {
       throw new Error(`lesson registry entry ${index} has an invalid lesson_key`)
     }
     if (typeof sourceId !== 'string' || !sourceId || sourceId.trim() !== sourceId) {

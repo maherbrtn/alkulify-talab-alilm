@@ -23,6 +23,14 @@ import {
   type StudentProgressRow,
 } from '../src/lib/student-progress.ts'
 import {
+  canonicalStudyPathVersion,
+  deriveStudyPathProgress,
+  studyPathVersionDigest,
+  validateStudyPathDefinition,
+  validateStudyPathVersionLessonKeys,
+  type StudyPathVersion,
+} from '../src/lib/study-paths.ts'
+import {
   decodeStudentLessonCatalog,
   fetchStudentLessonCatalog,
   StudentLessonCatalogError,
@@ -442,6 +450,318 @@ const studentMetadata = (lessonKey: string): StudentLessonMetadata => ({
   videoId: `video-${lessonKey}`,
   title: `Lesson ${lessonKey}`,
 })
+
+// Study Paths Slice 1 stays entirely static and pure. This intentionally small draft fixture is
+// not a scholarly path: its three real registry keys exercise two modules, ordering, digesting,
+// progress and Continue without allowing source-provider identifiers into the domain definition.
+const studyPathFixtureUrl = new URL('../src/lib/fixtures/study-path-v1.json', import.meta.url)
+const studyPathFixtureSource = readFileSync(studyPathFixtureUrl, 'utf8')
+const studyPathFixtureValue: unknown = JSON.parse(studyPathFixtureSource)
+const studyPathFixtureDraft = validateStudyPathDefinition(studyPathFixtureValue, registry)
+const studyPathFixture = validateStudyPathDefinition(
+  { ...studyPathFixtureDraft, status: 'published' },
+  registry,
+)
+const studyPathVersion = studyPathFixture.versions[0]
+const studyPathLessonKeys = studyPathVersion.modules.flatMap((module) =>
+  module.lessons.map((lesson) => lesson.lessonKey),
+)
+const registeredLessonKeys = new Set(registry.lessons.map((lesson) => lesson.lesson_key))
+
+assert.equal(studyPathFixtureDraft.status, 'draft')
+assert.equal(studyPathVersion.modules.length, 2)
+assert.equal(studyPathLessonKeys.length, 3)
+assert.ok(studyPathLessonKeys.every((lessonKey) => registeredLessonKeys.has(lessonKey)))
+assert.doesNotMatch(studyPathFixtureSource, /youtube|telegram|corpus|provider/i)
+assert.ok(Object.isFrozen(studyPathFixture))
+assert.ok(Object.isFrozen(studyPathVersion))
+assert.ok(Object.isFrozen(studyPathVersion.modules))
+assert.ok(Object.isFrozen(studyPathVersion.modules[0].lessons))
+assert.doesNotThrow(() => validateStudyPathVersionLessonKeys(studyPathVersion, registry))
+
+const definitionWithVersion = (version: unknown) => ({
+  ...studyPathFixture,
+  versions: [version],
+})
+const versionWithModules = (modules: readonly unknown[]) => ({
+  ...studyPathVersion,
+  modules,
+})
+const replaceStudyPathModule = (index: number, module: unknown): StudyPathVersion =>
+  validateStudyPathDefinition(
+    definitionWithVersion({
+      ...studyPathVersion,
+      modules: studyPathVersion.modules.map((current, at) => (at === index ? module : current)),
+    }),
+    registry,
+  ).versions[0]
+
+const firstStudyPathModule = studyPathVersion.modules[0]
+const secondStudyPathModule = studyPathVersion.modules[1]
+const firstStudyPathLesson = firstStudyPathModule.lessons[0]
+const secondStudyPathLesson = firstStudyPathModule.lessons[1]
+
+// Identity, exact schema, uniqueness, nonempty curricula and contiguous 1-based positions.
+assert.throws(
+  () => validateStudyPathDefinition({ ...studyPathFixture, pathId: 'not-a-uuid' }, registry),
+  /pathId must be a UUID v4/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      definitionWithVersion(
+        versionWithModules([
+          firstStudyPathModule,
+          { ...secondStudyPathModule, moduleKey: firstStudyPathModule.moduleKey },
+        ]),
+      ),
+      registry,
+    ),
+  /duplicate moduleKey/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      definitionWithVersion(
+        versionWithModules([
+          firstStudyPathModule,
+          {
+            ...secondStudyPathModule,
+            lessons: [
+              { ...secondStudyPathModule.lessons[0], lessonKey: firstStudyPathLesson.lessonKey },
+            ],
+          },
+        ]),
+      ),
+      registry,
+    ),
+  /duplicate lessonKey/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      definitionWithVersion(
+        versionWithModules([
+          firstStudyPathModule,
+          { ...secondStudyPathModule, position: 3 },
+        ]),
+      ),
+      registry,
+    ),
+  /modules\[1\]\.position must be 2/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      definitionWithVersion(
+        versionWithModules([
+          {
+            ...firstStudyPathModule,
+            lessons: [firstStudyPathLesson, { ...secondStudyPathLesson, position: 3 }],
+          },
+          secondStudyPathModule,
+        ]),
+      ),
+      registry,
+    ),
+  /lessons\[1\]\.position must be 2/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      definitionWithVersion(
+        versionWithModules([{ ...firstStudyPathModule, lessons: [] }, secondStudyPathModule]),
+      ),
+      registry,
+    ),
+  /must contain at least one lesson/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      definitionWithVersion(versionWithModules([])),
+      registry,
+    ),
+  /must contain at least one module/,
+)
+assert.throws(
+  () => validateStudyPathDefinition(studyPathFixture),
+  /require lesson registry validation/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      definitionWithVersion(
+        versionWithModules([
+          {
+            ...firstStudyPathModule,
+            lessons: [
+              {
+                ...firstStudyPathLesson,
+                lessonKey: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+              },
+              secondStudyPathLesson,
+            ],
+          },
+          secondStudyPathModule,
+        ]),
+      ),
+      registry,
+    ),
+  /unknown lessonKey/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      definitionWithVersion(
+        versionWithModules([
+          {
+            ...firstStudyPathModule,
+            lessons: [{ ...firstStudyPathLesson, youtubeVideoId: 'forbidden' }, secondStudyPathLesson],
+          },
+          secondStudyPathModule,
+        ]),
+      ),
+      registry,
+    ),
+  /unexpected field: youtubeVideoId/,
+)
+
+// The canonical form is a fixed tuple, and SHA-256 covers only path/version identity and the
+// complete curriculum-significant module/lesson structure. Presentation metadata never enters it.
+const canonicalStudyPath = canonicalStudyPathVersion(studyPathVersion)
+const studyPathDigest = await studyPathVersionDigest(studyPathVersion)
+assert.equal(canonicalStudyPath, canonicalStudyPathVersion(studyPathVersion))
+assert.equal(studyPathDigest, await studyPathVersionDigest(studyPathVersion))
+assert.match(studyPathDigest, /^[0-9a-f]{64}$/)
+assert.ok(canonicalStudyPath.startsWith('["study-path-curriculum-v1"'))
+assert.ok(!canonicalStudyPath.includes(studyPathFixture.title))
+assert.ok(!canonicalStudyPath.includes(studyPathFixture.description))
+
+const titledModuleVersion = replaceStudyPathModule(0, {
+  ...firstStudyPathModule,
+  title: `${firstStudyPathModule.title} — معدل`,
+})
+const objectiveModuleVersion = replaceStudyPathModule(0, {
+  ...firstStudyPathModule,
+  objective: `${firstStudyPathModule.objective} معدل`,
+})
+const reorderedModuleVersion = validateStudyPathDefinition(
+  definitionWithVersion(
+    versionWithModules([
+      { ...secondStudyPathModule, position: 1 },
+      { ...firstStudyPathModule, position: 2 },
+    ]),
+  ),
+  registry,
+).versions[0]
+const changedMembershipVersion = replaceStudyPathModule(0, {
+  ...firstStudyPathModule,
+  lessons: [
+    firstStudyPathLesson,
+    { ...secondStudyPathLesson, lessonKey: registry.lessons[3].lesson_key },
+  ],
+})
+const reorderedLessonVersion = replaceStudyPathModule(0, {
+  ...firstStudyPathModule,
+  lessons: [
+    { ...secondStudyPathLesson, position: 1 },
+    { ...firstStudyPathLesson, position: 2 },
+  ],
+})
+for (const changedVersion of [
+  titledModuleVersion,
+  objectiveModuleVersion,
+  reorderedModuleVersion,
+  changedMembershipVersion,
+  reorderedLessonVersion,
+]) {
+  assert.notEqual(await studyPathVersionDigest(changedVersion), studyPathDigest)
+}
+
+const presentationOnlyChange = validateStudyPathDefinition(
+  {
+    ...studyPathFixture,
+    title: `${studyPathFixture.title} — عرض معدل`,
+    description: `${studyPathFixture.description} عرض معدل.`,
+    presentation: { fixture: true, accent: 'changed' },
+  },
+  registry,
+)
+assert.equal(
+  await studyPathVersionDigest(presentationOnlyChange.versions[0]),
+  studyPathDigest,
+)
+
+// Module/path completion and Continue derive only from sticky lesson_progress.completed. Missing
+// rows are incomplete, duration never weights the result, and a row saved before enrollment counts
+// because enrollment time is deliberately absent from this pure function's inputs.
+const studyPathRow = (
+  lessonKey: string,
+  positionSeconds: number,
+  durationSeconds: number,
+  completed: boolean,
+): StudentProgressRow =>
+  studentRow(lessonKey, positionSeconds, durationSeconds, completed)
+
+const zeroStudyPathProgress = deriveStudyPathProgress(studyPathVersion, [])
+assert.equal(zeroStudyPathProgress.completedLessons, 0)
+assert.equal(zeroStudyPathProgress.totalLessons, 3)
+assert.equal(zeroStudyPathProgress.percentage, 0)
+assert.equal(zeroStudyPathProgress.completed, false)
+assert.equal(zeroStudyPathProgress.modules[0].completed, false)
+assert.equal(zeroStudyPathProgress.continueLesson?.lessonKey, studyPathLessonKeys[0])
+assert.equal(zeroStudyPathProgress.continueLesson?.progress, null)
+assert.equal(zeroStudyPathProgress.continueLesson?.effectiveResumeSeconds, 0)
+
+const partialRow = studyPathRow(studyPathLessonKeys[0], 42.5, 100, false)
+const partialStudyPathProgress = deriveStudyPathProgress(studyPathVersion, [partialRow])
+assert.equal(partialStudyPathProgress.completedLessons, 0)
+assert.equal(partialStudyPathProgress.continueLesson?.lessonKey, studyPathLessonKeys[0])
+assert.equal(partialStudyPathProgress.continueLesson?.progress, partialRow)
+assert.equal(partialStudyPathProgress.continueLesson?.effectiveResumeSeconds, 42.5)
+
+const firstCompletedRow = studyPathRow(studyPathLessonKeys[0], 10, 10, true)
+const oneCompletedStudyPathProgress = deriveStudyPathProgress(studyPathVersion, [firstCompletedRow])
+assert.equal(oneCompletedStudyPathProgress.completedLessons, 1)
+assert.equal(oneCompletedStudyPathProgress.percentage, 33)
+assert.equal(Number.isInteger(oneCompletedStudyPathProgress.percentage), true)
+assert.equal(oneCompletedStudyPathProgress.modules[0].percentage, 50)
+assert.equal(oneCompletedStudyPathProgress.continueLesson?.lessonKey, studyPathLessonKeys[1])
+
+const secondCompletedRow = studyPathRow(studyPathLessonKeys[1], 5_000, 10_000, true)
+const firstModuleComplete = deriveStudyPathProgress(studyPathVersion, [
+  firstCompletedRow,
+  secondCompletedRow,
+])
+assert.equal(firstModuleComplete.completedLessons, 2)
+assert.equal(firstModuleComplete.percentage, 66)
+assert.equal(firstModuleComplete.modules[0].completed, true)
+assert.equal(firstModuleComplete.modules[0].percentage, 100)
+assert.equal(firstModuleComplete.modules[1].completed, false)
+assert.equal(firstModuleComplete.continueLesson?.lessonKey, studyPathLessonKeys[2])
+
+const preExistingCompletion = deriveStudyPathProgress(studyPathVersion, [
+  studyPathRow(studyPathLessonKeys[2], 1, 1, true),
+])
+assert.equal(preExistingCompletion.completedLessons, 1)
+assert.equal(preExistingCompletion.percentage, 33)
+assert.equal(preExistingCompletion.continueLesson?.lessonKey, studyPathLessonKeys[0])
+
+const completedStudyPathProgress = deriveStudyPathProgress(studyPathVersion, [
+  firstCompletedRow,
+  secondCompletedRow,
+  studyPathRow(studyPathLessonKeys[2], 1, 1, true),
+])
+assert.equal(completedStudyPathProgress.completedLessons, 3)
+assert.equal(completedStudyPathProgress.percentage, 100)
+assert.equal(completedStudyPathProgress.completed, true)
+assert.ok(completedStudyPathProgress.modules.every((module) => module.completed))
+assert.equal(completedStudyPathProgress.continueLesson, null)
+assert.throws(
+  () => deriveStudyPathProgress(studyPathVersion, [firstCompletedRow, firstCompletedRow]),
+  /duplicate lesson progress row/,
+)
 
 // Empty inputs and missing metadata produce explicit, benign empty states.
 assert.deepEqual(deriveStudentProgress([], [studentMetadata('unused')]), {
