@@ -264,12 +264,15 @@ assert.equal(new Set(books.map((book) => book.download)).size, books.length)
 
 // Telegram articles: their photos live in public/, which nothing else in the build validates —
 // a missed download or a renamed file is a 404 on a live page and silent everywhere else.
-const pub = new URL('../public/', import.meta.url).pathname
+const pub = new URL('../public/', import.meta.url)
 for (const a of corpus.filter((a) => a.source === 'telegram')) {
   assert.ok(a.title && a.paragraphs.length && a.date, `${a.id} came out of Telegram empty`)
   assert.ok(a.url.startsWith('https://t.me/'), `${a.id} has no source message`)
   for (const img of a.images ?? []) {
-    assert.ok(existsSync(pub + img.src.replace(/^\//, '')), `${a.id}: ${img.src} is not in public/`)
+    assert.ok(
+      existsSync(new URL(img.src.replace(/^\//, ''), pub)),
+      `${a.id}: ${img.src} is not in public/`,
+    )
     assert.ok(img.w > 0 && img.h > 0, `${a.id}: ${img.src} has no dimensions`)
   }
 }
