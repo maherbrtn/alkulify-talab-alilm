@@ -501,6 +501,79 @@ const secondStudyPathModule = studyPathVersion.modules[1]
 const firstStudyPathLesson = firstStudyPathModule.lessons[0]
 const secondStudyPathLesson = firstStudyPathModule.lessons[1]
 
+const { currentVersion: _currentVersion, ...studyPathWithoutCurrentVersion } = studyPathFixture
+const invalidStudyPathDefinitions: { name: string; value: unknown; error: RegExp }[] = [
+  {
+    name: 'invalid status',
+    value: { ...studyPathFixture, status: 'invalid' },
+    error: /status is invalid/,
+  },
+  {
+    name: 'zero version',
+    value: definitionWithVersion({ ...studyPathVersion, version: 0 }),
+    error: /version must be a positive integer/,
+  },
+  {
+    name: 'non-integer version',
+    value: definitionWithVersion({ ...studyPathVersion, version: 1.5 }),
+    error: /version must be a positive integer/,
+  },
+  {
+    name: 'duplicate versions',
+    value: { ...studyPathFixture, versions: [studyPathVersion, studyPathVersion] },
+    error: /duplicate study path version/,
+  },
+  {
+    name: 'missing currentVersion',
+    value: studyPathWithoutCurrentVersion,
+    error: /currentVersion must be a positive integer/,
+  },
+  {
+    name: 'mismatched version pathId',
+    value: definitionWithVersion({
+      ...studyPathVersion,
+      pathId: '66666666-6666-4666-8666-666666666666',
+    }),
+    error: /pathId must match the path/,
+  },
+  {
+    name: 'invalid slug',
+    value: { ...studyPathFixture, slug: 'invalid_slug' },
+    error: /slug is invalid/,
+  },
+  {
+    name: 'invalid publishedAt',
+    value: definitionWithVersion({ ...studyPathVersion, publishedAt: 'not-a-date' }),
+    error: /publishedAt must be a canonical ISO timestamp/,
+  },
+  {
+    name: 'noncanonical publishedAt',
+    value: definitionWithVersion({ ...studyPathVersion, publishedAt: '2026-08-31T00:00:00Z' }),
+    error: /publishedAt must be a canonical ISO timestamp/,
+  },
+  {
+    name: 'unexpected definition field',
+    value: { ...studyPathFixture, unexpected: true },
+    error: /definition has an unexpected field: unexpected/,
+  },
+  {
+    name: 'unexpected version field',
+    value: definitionWithVersion({ ...studyPathVersion, unexpected: true }),
+    error: /version has an unexpected field: unexpected/,
+  },
+  {
+    name: 'unexpected module field',
+    value: definitionWithVersion(
+      versionWithModules([{ ...firstStudyPathModule, unexpected: true }, secondStudyPathModule]),
+    ),
+    error: /modules\[0\] has an unexpected field: unexpected/,
+  },
+]
+
+for (const { name, value, error } of invalidStudyPathDefinitions) {
+  assert.throws(() => validateStudyPathDefinition(value, registry), error, name)
+}
+
 // Identity, exact schema, uniqueness, nonempty curricula and contiguous 1-based positions.
 assert.throws(
   () => validateStudyPathDefinition({ ...studyPathFixture, pathId: 'not-a-uuid' }, registry),
@@ -638,6 +711,39 @@ assert.ok(canonicalStudyPath.startsWith('["study-path-curriculum-v1"'))
 assert.ok(!canonicalStudyPath.includes(studyPathFixture.title))
 assert.ok(!canonicalStudyPath.includes(studyPathFixture.description))
 
+const goldenCanonicalStudyPath =
+  '["study-path-curriculum-v1","55555555-5555-4555-8555-555555555555",1,' +
+  '[["11111111-1111-4111-8111-111111111111","الوحدة التجريبية الأولى",' +
+  '"اختبار ترتيب درسين داخل وحدة واحدة.",1,[["f34d8d0d-188e-4d38-b67e-bb7e21bfdeae",1],' +
+  '["80456b68-653a-44c4-9021-1aa56dfb515f",2]]],["22222222-2222-4222-8222-222222222222",' +
+  '"الوحدة التجريبية الثانية","اختبار الانتقال إلى وحدة تالية.",2,' +
+  '[["8a3b01cb-8b22-4c99-b24d-4769c71ec2b2",1]]]]]'
+assert.equal(canonicalStudyPath, goldenCanonicalStudyPath)
+assert.equal(studyPathDigest, '2638516b2d359c102057748c68ce5e2c9eec5ee881b8d4d9b2a0ed31b9c8cd05')
+
+const keyReorderedStudyPathVersion = {
+  modules: studyPathVersion.modules.map((module) => ({
+    lessons: module.lessons.map((lesson) => ({
+      position: lesson.position,
+      lessonKey: lesson.lessonKey,
+    })),
+    position: module.position,
+    objective: module.objective,
+    title: module.title,
+    moduleKey: module.moduleKey,
+  })),
+  publishedAt: studyPathVersion.publishedAt,
+  version: studyPathVersion.version,
+  pathId: studyPathVersion.pathId,
+}
+const differentlyFormattedStudyPathVersion: unknown = JSON.parse(
+  JSON.stringify(studyPathVersion, null, 4),
+)
+for (const equivalentVersion of [keyReorderedStudyPathVersion, differentlyFormattedStudyPathVersion]) {
+  assert.equal(canonicalStudyPathVersion(equivalentVersion), canonicalStudyPath)
+  assert.equal(await studyPathVersionDigest(equivalentVersion), studyPathDigest)
+}
+
 const titledModuleVersion = replaceStudyPathModule(0, {
   ...firstStudyPathModule,
   title: `${firstStudyPathModule.title} — معدل`,
@@ -669,12 +775,27 @@ const reorderedLessonVersion = replaceStudyPathModule(0, {
     { ...firstStudyPathLesson, position: 2 },
   ],
 })
+const changedPathIdVersion = {
+  ...studyPathVersion,
+  pathId: '66666666-6666-4666-8666-666666666666',
+}
+const changedVersionNumber = { ...studyPathVersion, version: 2 }
+const changedModuleKeyVersion = {
+  ...studyPathVersion,
+  modules: [
+    { ...firstStudyPathModule, moduleKey: '33333333-3333-4333-8333-333333333333' },
+    secondStudyPathModule,
+  ],
+}
 for (const changedVersion of [
   titledModuleVersion,
   objectiveModuleVersion,
   reorderedModuleVersion,
   changedMembershipVersion,
   reorderedLessonVersion,
+  changedPathIdVersion,
+  changedVersionNumber,
+  changedModuleKeyVersion,
 ]) {
   assert.notEqual(await studyPathVersionDigest(changedVersion), studyPathDigest)
 }
@@ -728,6 +849,35 @@ assert.equal(oneCompletedStudyPathProgress.percentage, 33)
 assert.equal(Number.isInteger(oneCompletedStudyPathProgress.percentage), true)
 assert.equal(oneCompletedStudyPathProgress.modules[0].percentage, 50)
 assert.equal(oneCompletedStudyPathProgress.continueLesson?.lessonKey, studyPathLessonKeys[1])
+
+const secondStudyPathDefinition = validateStudyPathDefinition(
+  {
+    ...studyPathFixture,
+    pathId: '66666666-6666-4666-8666-666666666666',
+    slug: 'shared-lesson-fixture',
+    versions: [
+      {
+        ...studyPathVersion,
+        pathId: '66666666-6666-4666-8666-666666666666',
+        modules: [
+          {
+            ...firstStudyPathModule,
+            moduleKey: '33333333-3333-4333-8333-333333333333',
+            lessons: [firstStudyPathLesson],
+          },
+        ],
+      },
+    ],
+  },
+  registry,
+)
+const sharedLessonProgress = deriveStudyPathProgress(secondStudyPathDefinition.versions[0], [
+  firstCompletedRow,
+])
+assert.equal(oneCompletedStudyPathProgress.completedLessons, 1)
+assert.equal(sharedLessonProgress.completedLessons, 1)
+assert.equal(sharedLessonProgress.percentage, 100)
+assert.equal(sharedLessonProgress.completed, true)
 
 const secondCompletedRow = studyPathRow(studyPathLessonKeys[1], 5_000, 10_000, true)
 const firstModuleComplete = deriveStudyPathProgress(studyPathVersion, [
