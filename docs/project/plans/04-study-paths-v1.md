@@ -1,15 +1,15 @@
 # خطة: 04 — مسارات الدراسة V1
 
-- الحالة: `مسودة`
+- الحالة: `نشطة — Slice 1 مكتملة`
 - المالك: `Codex / صاحب المشروع`
-- آخر تحديث: `2026-08-31`
+- آخر تحديث: `2026-09-01`
 - ملف الوحدة: `docs/project/06-STUDY-PATHS.md`
 
 ## الهدف ومعيار الاكتمال
 
 إضافة مسارات دراسة عامة ومنظمة فوق الدروس الحالية، مع تسجيل خاص بالطالب مثبت على إصدار منهج غير قابل للتغيير، ومن دون إنشاء مصدر ثانٍ لاكتمال الدرس أو ربط المسار بمزود محتوى. يكتمل V1 عندما يمكن نشر تعريفات ثابتة بإصدارات، وتسجيل الطالب في عدة مسارات نشطة بالتوازي، واشتقاق تقدم كل مسار ووحداته من `lesson_progress`، وعرض «تابع المسار» لكل تسجيل نشط مع بقاء Continue العام والدروس الأخيرة مستقلين.
 
-هذه الخطة لا تبدأ التنفيذ بذاتها. أول شريحة تنفيذ بعد اعتماد الخطة هي شريحة المجال الثابت والاشتقاقات النقية فقط؛ لا تتضمن migration أو كتابة Supabase.
+بدأ التنفيذ واكتملت Slice 1 الخاصة بالمجال الثابت والاشتقاقات النقية فقط. لا تتضمن الحالة المنفذة migration أو كتابة Supabase أو صفحات أو تسجيلات؛ Slice 2 هي الخطوة التالية بعد مراجعة بوابة Slice 1.
 
 ## الحالة الأساسية ودليل المستودع
 
@@ -20,7 +20,7 @@
 - `lesson_progress` صف واحد لكل `(user_id, lesson_key)`؛ القراءة للمالك تحت RLS، والكتابة عبر `merge_lesson_progress` فقط، والاكتمال sticky وفق إشارة Player الحالية عند 90% أو نهاية التشغيل.
 - مساحة الطالب تقرأ التقدم السحابي وتحل metadata بكتالوج static، وتشتق Continue العام وRecent من دون كتابة أو مصالحة محلية.
 - توجد 109 قوائم تشغيل و582 درسًا في أكثر من قائمة. القوائم مادة تصفح وترتيب وليست مسارات دراسة وفق D-010.
-- لا توجد حاليًا تعريفات أو جداول أو صفحات أو تسجيلات لمسارات الدراسة.
+- يوجد الآن نموذج المجال في `src/lib/study-paths.ts` وfixture تقني draft في `src/lib/fixtures/study-path-v1.json` وتغطية regression في `scripts/selfcheck.ts`. لا توجد جداول أو صفحات أو تسجيلات لمسارات الدراسة.
 
 ## النطاق
 
@@ -63,6 +63,7 @@
 11. `lesson_progress.completed` هو المرجع الوحيد لاكتمال الدرس.
 12. تقدم الوحدة والمسار ونسبتهما وحالة الاكتمال قيم مشتقة وليست سجلات مستقلة.
 13. جميع دروس V1 مطلوبة؛ يجب أن يحتوي الإصدار المنشور وحدة واحدة ودرسًا واحدًا على الأقل.
+14. تكتب جميع UUIDs بتهجئة canonical lowercase. وحده الإصدار الحالي لمسار `draft` يجوز أن يحمل `publishedAt: null`؛ كل إصدار آخر مؤرخ بـISO timestamp canonical، وكل إصدار منشور immutable.
 
 ## النموذج المقترح
 
@@ -82,7 +83,7 @@ type StudyPath = {
 type StudyPathVersion = {
   pathId: string
   version: number
-  publishedAt: string
+  publishedAt: string | null
   modules: StudyPathModule[]
 }
 
@@ -187,15 +188,15 @@ type StudyPathLesson = {
 
 ### Slice 1 — المجال الثابت والاشتقاقات النقية فقط
 
-- [ ] أنواع TypeScript لـStudy Path وVersion وModule وLesson item.
-- [ ] fixture/تعريف مسار Git-authored صغير يستخدم `lesson_key` حقيقية.
-- [ ] validation للـUUIDs، الإصدار، الحالات، عدم الفراغ، positions المتصلة/الفريدة، وعدم تكرار modules أو lessons.
-- [ ] canonical serialization وحساب digest يغطي كل curriculum-significant structure.
-- [ ] تحقق أن كل `lesson_key` في كل إصدار منشور تحل عبر `data/lesson-registry.json`، من دون تخزين provider ID في التعريف.
-- [ ] pure derivation واختبارات/selfchecks لاكتمال الدرس والوحدة والمسار، النسبة، التقدم السابق للتسجيل، الدرس المشترك، وPath Continue المرتب.
-- [ ] لا migration ولا Supabase client/RPC ولا UI ولا route في هذه الشريحة.
+- [x] أنواع TypeScript لـStudy Path وVersion وModule وLesson item.
+- [x] fixture/تعريف مسار Git-authored صغير يستخدم `lesson_key` حقيقية.
+- [x] validation للـUUIDs canonical lowercase، والإصدار، والحالات، ودورة `publishedAt`، وعدم الفراغ، وpositions المتصلة/الفريدة، وعدم تكرار modules أو lessons.
+- [x] canonical serialization وحساب digest يغطي كل curriculum-significant structure.
+- [x] تحقق أن كل `lesson_key` في كل إصدار منشور تحل عبر `data/lesson-registry.json`، من دون تخزين provider ID في التعريف.
+- [x] pure derivation واختبارات/selfchecks لاكتمال الدرس والوحدة والمسار، النسبة، التقدم السابق للتسجيل، الدرس المشترك، وPath Continue المرتب.
+- [x] لا migration ولا Supabase client/RPC ولا UI ولا route في هذه الشريحة.
 
-بوابة Slice 1: لا تبدأ Slice 2 حتى يثبت النموذج static بالـselfchecks، ويكون digest deterministic، وتنجح registry resolution لكل إصدار، وتراجع البنية المنشورة المقترحة يدويًا.
+بوابة Slice 1: أثبتت selfchecks النموذج static والـdigest deterministic وregistry resolution للـfixture، وروجعت البنية المقترحة. لا يمثل fixture draft نشر مسار علمي أو تفعيل enrollment.
 
 ### Slice 2 — صفحات القراءة العامة static
 
@@ -327,4 +328,4 @@ type StudyPathLesson = {
 
 ## النتيجة
 
-لم يبدأ التنفيذ. عند اعتماد هذه الخطة يبدأ Slice 1 فقط، ويبقى أي عمل Supabase مؤجلًا حتى نجاح بوابة المجال static والاشتقاقات النقية.
+اكتملت Slice 1 عند `45291c9`: نموذج المجال static، والتحقق، والـcanonical digest، واشتقاقات التقدم وContinue، وتغطية التقدم السابق والمشترك. Slice 2 وما بعدها غير منفذة؛ يبقى أي عمل Supabase أو enrollment أو UI مؤجلًا إلى شريحته الصريحة.

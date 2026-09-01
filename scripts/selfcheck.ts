@@ -459,7 +459,14 @@ const studyPathFixtureSource = readFileSync(studyPathFixtureUrl, 'utf8')
 const studyPathFixtureValue: unknown = JSON.parse(studyPathFixtureSource)
 const studyPathFixtureDraft = validateStudyPathDefinition(studyPathFixtureValue, registry)
 const studyPathFixture = validateStudyPathDefinition(
-  { ...studyPathFixtureDraft, status: 'published' },
+  {
+    ...studyPathFixtureDraft,
+    status: 'published',
+    versions: studyPathFixtureDraft.versions.map((version) => ({
+      ...version,
+      publishedAt: '2026-08-31T00:00:00.000Z',
+    })),
+  },
   registry,
 )
 const studyPathVersion = studyPathFixture.versions[0]
@@ -469,6 +476,48 @@ const studyPathLessonKeys = studyPathVersion.modules.flatMap((module) =>
 const registeredLessonKeys = new Set(registry.lessons.map((lesson) => lesson.lesson_key))
 
 assert.equal(studyPathFixtureDraft.status, 'draft')
+assert.equal(studyPathFixtureDraft.versions[0].publishedAt, null)
+assert.throws(
+  () => validateStudyPathDefinition({ ...studyPathFixture, status: 'draft' }, registry),
+  /draft study path current version must not have publishedAt/,
+)
+for (const status of ['published', 'retired'] as const) {
+  assert.throws(
+    () =>
+      validateStudyPathDefinition(
+        {
+          ...studyPathFixture,
+          status,
+          versions: [{ ...studyPathVersion, publishedAt: null }],
+        },
+        registry,
+      ),
+    new RegExp(`${status} study path versions require publishedAt`),
+  )
+}
+const draftSecondVersion = { ...studyPathVersion, version: 2, publishedAt: null }
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      {
+        ...studyPathFixtureDraft,
+        currentVersion: 2,
+        versions: [{ ...studyPathVersion, publishedAt: null }, draftSecondVersion],
+      },
+      registry,
+    ),
+  /draft study path historical versions require publishedAt/,
+)
+assert.doesNotThrow(() =>
+  validateStudyPathDefinition(
+    {
+      ...studyPathFixtureDraft,
+      currentVersion: 2,
+      versions: [studyPathVersion, draftSecondVersion],
+    },
+    registry,
+  ),
+)
 assert.equal(studyPathVersion.modules.length, 2)
 assert.equal(studyPathLessonKeys.length, 3)
 assert.ok(studyPathLessonKeys.every((lessonKey) => registeredLessonKeys.has(lessonKey)))
@@ -577,7 +626,45 @@ for (const { name, value, error } of invalidStudyPathDefinitions) {
 // Identity, exact schema, uniqueness, nonempty curricula and contiguous 1-based positions.
 assert.throws(
   () => validateStudyPathDefinition({ ...studyPathFixture, pathId: 'not-a-uuid' }, registry),
-  /pathId must be a UUID v4/,
+  /pathId must be a canonical lowercase UUID v4/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      {
+        ...studyPathFixture,
+        pathId: 'ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF',
+        versions: [
+          {
+            ...studyPathVersion,
+            pathId: 'ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF',
+          },
+        ],
+      },
+      registry,
+    ),
+  /pathId must be a canonical lowercase UUID v4/,
+)
+assert.throws(
+  () =>
+    validateStudyPathDefinition(
+      definitionWithVersion(
+        versionWithModules([
+          { ...firstStudyPathModule, moduleKey: 'ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF' },
+          secondStudyPathModule,
+        ]),
+      ),
+      registry,
+    ),
+  /moduleKey must be a canonical lowercase UUID v4/,
+)
+assert.throws(
+  () =>
+    validateLessonRegistry({
+      version: 1,
+      lessons: [{ ...sample, lesson_key: sample.lesson_key.toUpperCase() }],
+    }),
+  /invalid lesson_key/,
 )
 assert.throws(
   () =>
@@ -800,6 +887,28 @@ for (const changedVersion of [
   assert.notEqual(await studyPathVersionDigest(changedVersion), studyPathDigest)
 }
 
+const cyclicPresentation: Record<string, unknown> = {}
+cyclicPresentation.self = cyclicPresentation
+const invalidPresentationValues: readonly unknown[] = [
+  undefined,
+  () => undefined,
+  1n,
+  Number.NaN,
+  Number.POSITIVE_INFINITY,
+  new Date('2026-08-31T00:00:00.000Z'),
+  cyclicPresentation,
+]
+for (const invalid of invalidPresentationValues) {
+  assert.throws(
+    () =>
+      validateStudyPathDefinition(
+        { ...studyPathFixture, presentation: { invalid } },
+        registry,
+      ),
+    /presentation must contain only JSON-safe values/,
+  )
+}
+
 const presentationOnlyChange = validateStudyPathDefinition(
   {
     ...studyPathFixture,
@@ -837,10 +946,16 @@ assert.equal(zeroStudyPathProgress.continueLesson?.effectiveResumeSeconds, 0)
 
 const partialRow = studyPathRow(studyPathLessonKeys[0], 42.5, 100, false)
 const partialStudyPathProgress = deriveStudyPathProgress(studyPathVersion, [partialRow])
+const partialProgressSnapshot = partialStudyPathProgress.modules[0].lessons[0].progress
 assert.equal(partialStudyPathProgress.completedLessons, 0)
 assert.equal(partialStudyPathProgress.continueLesson?.lessonKey, studyPathLessonKeys[0])
-assert.equal(partialStudyPathProgress.continueLesson?.progress, partialRow)
+assert.notEqual(partialProgressSnapshot, partialRow)
+assert.deepEqual(partialProgressSnapshot, partialRow)
+assert.ok(Object.isFrozen(partialProgressSnapshot))
+assert.equal(partialStudyPathProgress.continueLesson?.progress, partialProgressSnapshot)
 assert.equal(partialStudyPathProgress.continueLesson?.effectiveResumeSeconds, 42.5)
+partialRow.position_seconds = 84
+assert.equal(partialProgressSnapshot?.position_seconds, 42.5)
 
 const firstCompletedRow = studyPathRow(studyPathLessonKeys[0], 10, 10, true)
 const oneCompletedStudyPathProgress = deriveStudyPathProgress(studyPathVersion, [firstCompletedRow])

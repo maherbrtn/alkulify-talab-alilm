@@ -29,7 +29,7 @@ export type StudyPathModule = {
 export type StudyPathVersion = {
   readonly pathId: string
   readonly version: number
-  readonly publishedAt: string
+  readonly publishedAt: string | null
   readonly modules: readonly StudyPathModule[]
 }
 
@@ -41,7 +41,7 @@ export type StudyPathLessonProgress = {
   readonly lessonKey: string
   readonly position: number
   readonly completed: boolean
-  readonly progress: StudentProgressRow | null
+  readonly progress: Readonly<StudentProgressRow> | null
   readonly effectiveResumeSeconds: number
 }
 
@@ -60,7 +60,7 @@ export type StudyPathContinueLesson = {
   readonly moduleKey: string
   readonly modulePosition: number
   readonly lessonPosition: number
-  readonly progress: StudentProgressRow | null
+  readonly progress: Readonly<StudentProgressRow> | null
   readonly effectiveResumeSeconds: number
 }
 
@@ -100,6 +100,32 @@ function assertExactKeys(
   if (extra) throw new Error(`${label} has an unexpected field: ${extra}`)
 }
 
+function assertJsonSafe(value: unknown, ancestors = new Set<object>()): void {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  ) {
+    return
+  }
+  if (typeof value !== 'object') {
+    throw new Error('study path definition.presentation must contain only JSON-safe values')
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) {
+    throw new Error('study path definition.presentation must contain only JSON-safe values')
+  }
+  if (ancestors.has(value)) {
+    throw new Error('study path definition.presentation must contain only JSON-safe values')
+  }
+  ancestors.add(value)
+  for (const nested of Array.isArray(value) ? value : Object.values(value)) {
+    assertJsonSafe(nested, ancestors)
+  }
+  ancestors.delete(value)
+}
+
 function nonemptyString(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value || value.trim() !== value) {
     throw new Error(`${label} must be a nonempty trimmed string`)
@@ -115,11 +141,12 @@ function positiveInteger(value: unknown, label: string): number {
 }
 
 function uuid(value: unknown, label: string): string {
-  if (!isUuidV4(value)) throw new Error(`${label} must be a UUID v4`)
+  if (!isUuidV4(value)) throw new Error(`${label} must be a canonical lowercase UUID v4`)
   return value
 }
 
-function isoTimestamp(value: unknown, label: string): string {
+function publicationTimestamp(value: unknown, label: string): string | null {
+  if (value === null) return null
   if (typeof value !== 'string') throw new Error(`${label} must be an ISO timestamp`)
   const parsed = new Date(value)
   if (!Number.isFinite(parsed.valueOf()) || parsed.toISOString() !== value) {
@@ -209,7 +236,7 @@ export function validateStudyPathVersion(
   return Object.freeze({
     pathId,
     version: positiveInteger(value.version, 'study path version.version'),
-    publishedAt: isoTimestamp(value.publishedAt, 'study path version.publishedAt'),
+    publishedAt: publicationTimestamp(value.publishedAt, 'study path version.publishedAt'),
     modules,
   })
 }
@@ -257,6 +284,17 @@ export function validateStudyPathDefinition(
   if (!versionNumbers.has(currentVersion)) {
     throw new Error('study path definition.currentVersion must identify an included version')
   }
+  for (const version of versions) {
+    if (status === 'draft' && version.version === currentVersion && version.publishedAt !== null) {
+      throw new Error('draft study path current version must not have publishedAt')
+    }
+    if (status === 'draft' && version.version !== currentVersion && version.publishedAt === null) {
+      throw new Error('draft study path historical versions require publishedAt')
+    }
+    if (status !== 'draft' && version.publishedAt === null) {
+      throw new Error(`${status} study path versions require publishedAt`)
+    }
+  }
   if (!registry && status !== 'draft') {
     throw new Error('published and retired study paths require lesson registry validation')
   }
@@ -266,6 +304,7 @@ export function validateStudyPathDefinition(
   if (value.presentation !== undefined && !object(value.presentation)) {
     throw new Error('study path definition.presentation must be an object')
   }
+  if (value.presentation !== undefined) assertJsonSafe(value.presentation)
 
   return Object.freeze({
     pathId,
@@ -316,12 +355,12 @@ export function deriveStudyPathProgress(
   progressRows: readonly StudentProgressRow[],
 ): StudyPathProgress {
   const version = validateStudyPathVersion(value)
-  const progressByLessonKey = new Map<string, StudentProgressRow>()
+  const progressByLessonKey = new Map<string, Readonly<StudentProgressRow>>()
   for (const row of progressRows) {
     if (progressByLessonKey.has(row.lesson_key)) {
       throw new Error(`duplicate lesson progress row: ${row.lesson_key}`)
     }
-    progressByLessonKey.set(row.lesson_key, row)
+    progressByLessonKey.set(row.lesson_key, Object.freeze({ ...row }))
   }
 
   let completedLessons = 0
