@@ -1,0 +1,35 @@
+---
+import StudyPathVersion from '../../../../components/StudyPathVersion.astro'
+import Base from '../../../../layouts/Base.astro'
+import {
+  historicalStudyPathHref,
+  publicStudyPathHistoricalRouteEntries,
+  type PublicStudyPath,
+  type PublicStudyPathVersion,
+} from '../../../../lib/public-study-paths'
+import { breadcrumb } from '../../../../lib/seo'
+
+export function getStaticPaths() {
+  return publicStudyPathHistoricalRouteEntries()
+}
+
+const { path, version } = Astro.props as {
+  path: PublicStudyPath
+  version: PublicStudyPathVersion
+}
+const route = historicalStudyPathHref(path.slug, version.version)
+---
+
+<Base
+  title={`${path.title} — الإصدار ${version.version}`}
+  description={`نسخة تاريخية محفوظة من ${path.title}`}
+  schema={[
+    breadcrumb([
+      ['مسارات الدراسة', '/study-paths/'],
+      [path.title, `/study-paths/${path.slug}/`],
+      [`الإصدار ${version.version}`, route],
+    ]),
+  ]}
+>
+  <StudyPathVersion path={path} version={version} historical />
+</Base>

@@ -31,6 +31,16 @@ import {
   type StudyPathVersion,
 } from '../src/lib/study-paths.ts'
 import {
+  createPublicStudyPathCatalog,
+  currentStudyPathHref,
+  historicalStudyPathHref,
+  publicStudyPathBySlug,
+  publicStudyPathCurrentRouteEntries,
+  publicStudyPathHistoricalRouteEntries,
+  publicStudyPathVersion,
+  publicStudyPaths,
+} from '../src/lib/public-study-paths.ts'
+import {
   decodeStudentLessonCatalog,
   fetchStudentLessonCatalog,
   StudentLessonCatalogError,
@@ -527,6 +537,97 @@ assert.ok(Object.isFrozen(studyPathVersion))
 assert.ok(Object.isFrozen(studyPathVersion.modules))
 assert.ok(Object.isFrozen(studyPathVersion.modules[0].lessons))
 assert.doesNotThrow(() => validateStudyPathVersionLessonKeys(studyPathVersion, registry))
+
+// Slice 2 publishes only reviewed definitions. The technical draft must fail closed instead of
+// becoming a production-looking course, while a synthesized published definition exercises the
+// build-time catalog and route resolvers without entering the real public catalog.
+assert.equal(publicStudyPaths.length, 0)
+assert.throws(
+  () => createPublicStudyPathCatalog([studyPathFixtureDraft]),
+  /only published study paths can enter the public catalog/,
+)
+assert.throws(
+  () => createPublicStudyPathCatalog([{ ...studyPathFixture, status: 'retired' }]),
+  /only published study paths can enter the public catalog/,
+)
+const historicalStudyPathVersion = {
+  ...studyPathVersion,
+  version: 2,
+  publishedAt: '2026-09-01T00:00:00.000Z',
+}
+const publicStudyPathFixture = {
+  ...studyPathFixture,
+  currentVersion: 2,
+  versions: [studyPathVersion, historicalStudyPathVersion],
+}
+const publicFixtureCatalog = createPublicStudyPathCatalog([publicStudyPathFixture])
+const publicFixturePath = publicStudyPathBySlug(studyPathFixture.slug, publicFixtureCatalog)!
+assert.equal(publicFixturePath.current.version, 2)
+assert.equal(publicStudyPathVersion(studyPathFixture.slug, 1, publicFixtureCatalog)?.version, 1)
+assert.equal(publicStudyPathVersion(studyPathFixture.slug, 99, publicFixtureCatalog), undefined)
+assert.equal(currentStudyPathHref(studyPathFixture.slug), '/study-paths/study-path-v1-fixture/')
+assert.equal(
+  historicalStudyPathHref(studyPathFixture.slug, 1),
+  '/study-paths/study-path-v1-fixture/versions/1/',
+)
+const currentRouteEntries = publicStudyPathCurrentRouteEntries(publicFixtureCatalog)
+assert.equal(currentRouteEntries.length, 1)
+assert.deepEqual(currentRouteEntries[0].params, { slug: studyPathFixture.slug })
+assert.equal(currentRouteEntries[0].props.path.current.version, 2)
+assert.equal(
+  currentStudyPathHref(currentRouteEntries[0].params.slug),
+  '/study-paths/study-path-v1-fixture/',
+)
+const historicalRouteEntries = publicStudyPathHistoricalRouteEntries(publicFixtureCatalog)
+assert.equal(historicalRouteEntries.length, 1)
+assert.deepEqual(historicalRouteEntries[0].params, {
+  slug: studyPathFixture.slug,
+  version: '1',
+})
+assert.equal(historicalRouteEntries[0].props.version.version, 1)
+assert.equal(
+  historicalStudyPathHref(
+    historicalRouteEntries[0].params.slug,
+    Number(historicalRouteEntries[0].params.version),
+  ),
+  '/study-paths/study-path-v1-fixture/versions/1/',
+)
+assert.equal(
+  new Set(
+    historicalRouteEntries.map(({ params }) => `${params.slug}/${params.version}`),
+  ).size,
+  historicalRouteEntries.length,
+)
+for (const version of publicFixturePath.versions) {
+  for (const module of version.modules) {
+    for (const lesson of module.lessons) {
+      assert.match(lesson.href, /^\/v\/[A-Za-z0-9_-]+\/$/)
+      assert.ok(lesson.title)
+    }
+  }
+}
+assert.throws(
+  () => createPublicStudyPathCatalog([publicStudyPathFixture, publicStudyPathFixture]),
+  /duplicate public study path slug/,
+)
+assert.throws(
+  () => createPublicStudyPathCatalog([{ ...publicStudyPathFixture, slug: 'unsafe/slug' }]),
+  /study path definition.slug is invalid/,
+)
+const publicStudyPathSource = readFileSync(
+  new URL('../src/lib/public-study-paths.ts', import.meta.url),
+  'utf8',
+)
+assert.doesNotMatch(publicStudyPathSource, /fixtures\/study-path-v1|supabase|auth|localStorage|fetch\s*\(/i)
+for (const file of [
+  '../src/pages/study-paths/index.astro',
+  '../src/pages/study-paths/[slug].astro',
+  '../src/pages/study-paths/[slug]/versions/[version].astro',
+  '../src/components/StudyPathVersion.astro',
+]) {
+  const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /supabase|auth|getSession|getUser|\.from\s*\(|\.rpc\s*\(/i)
+}
 
 const definitionWithVersion = (version: unknown) => ({
   ...studyPathFixture,

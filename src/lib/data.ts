@@ -32,7 +32,7 @@ export const segmentsDigest = (id: string): string => {
 }
 
 const generatedVideos = read<GeneratedVideo[]>('videos.json', [])
-const lessonRegistry = validateLessonRegistry(
+export const lessonRegistry = validateLessonRegistry(
   read<unknown>('lesson-registry.json', null),
   generatedVideos.map((video) => video.id),
 )
@@ -44,6 +44,7 @@ export const videos: Video[] = generatedVideos.map((video) => ({
 export const playlists: Playlist[] = read<Playlist[]>('playlists.json', [])
 
 export const videoById = new Map(videos.map((v) => [v.id, v]))
+export const videoByLessonKey = new Map(videos.map((video) => [video.lessonKey, video]))
 export const playlistById = new Map(playlists.map((p) => [p.id, p]))
 
 export const segmentsOf = (id: string): Segment[] => read<Segment[]>(`segments/${id}.json`, [])

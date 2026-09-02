@@ -1,0 +1,107 @@
+---
+import { lessons, withDigits } from '../lib/format'
+import {
+  historicalStudyPathHref,
+  type PublicStudyPath,
+  type PublicStudyPathVersion,
+} from '../lib/public-study-paths'
+
+const { path, version, historical = false } = Astro.props as {
+  path: PublicStudyPath
+  version: PublicStudyPathVersion
+  historical?: boolean
+}
+const lessonCount = version.modules.reduce((total, module) => total + module.lessons.length, 0)
+---
+
+<p class="mt-8 text-sm">
+  <a href="/study-paths/" class="text-muted underline underline-offset-4 hover:text-fg"
+    >مسارات الدراسة</a
+  >
+</p>
+
+<header class="mt-3">
+  <div class="flex flex-wrap items-center gap-2">
+    <h1 class="text-2xl font-semibold tracking-tight sm:text-3xl">{path.title}</h1>
+    {
+      historical && (
+        <span class="rounded-full bg-surface-2 px-3 py-1 text-xs text-muted">
+          نسخة محفوظة
+        </span>
+      )
+    }
+  </div>
+  <p class="mt-3 prose-read text-muted">{path.description}</p>
+  <p class="mt-3 text-sm text-muted">
+    <span set:html={withDigits(`الإصدار ${version.version} · ${lessons(lessonCount)}`)} />
+  </p>
+</header>
+
+{
+  historical && (
+    <aside class="mt-6 rounded-xl border border-border bg-surface-2 p-4 text-sm leading-relaxed">
+      هذه نسخة تاريخية ثابتة من المنهج.{' '}
+      <a
+        href={`/study-paths/${path.slug}/`}
+        class="text-accent underline underline-offset-4"
+      >
+        انتقل إلى الإصدار الحالي
+      </a>
+      .
+    </aside>
+  )
+}
+
+<ol class="mt-8 space-y-6">
+  {
+    version.modules.map((module) => (
+      <li class="card p-5 sm:p-6">
+        <section aria-labelledby={`module-${module.moduleKey}`}>
+          <p class="text-xs font-medium text-accent" set:html={withDigits(`الوحدة ${module.position}`)} />
+          <h2 id={`module-${module.moduleKey}`} class="mt-1 text-xl font-semibold leading-relaxed">
+            {module.title}
+          </h2>
+          <p class="mt-2 leading-loose text-muted">{module.objective}</p>
+
+          <ol class="mt-5 space-y-2">
+            {module.lessons.map((lesson) => (
+              <li>
+                <a
+                  href={lesson.href}
+                  class="flex min-h-11 items-center gap-3 rounded-xl border border-border px-4 py-3 transition-colors hover:bg-surface-2"
+                >
+                  <span class="digits text-sm text-muted">{lesson.position}</span>
+                  <span class="font-medium leading-relaxed">{lesson.title}</span>
+                </a>
+              </li>
+            ))}
+          </ol>
+        </section>
+      </li>
+    ))
+  }
+</ol>
+
+{
+  path.versions.length > 1 && (
+    <nav class="mt-10 border-t border-border pt-6" aria-label="إصدارات المسار">
+      <h2 class="font-semibold">إصدارات المسار</h2>
+      <ul class="mt-3 flex flex-wrap gap-2">
+        {path.versions.map((item) => (
+          <li>
+            <a
+              href={
+                item.version === path.currentVersion
+                  ? `/study-paths/${path.slug}/`
+                  : historicalStudyPathHref(path.slug, item.version)
+              }
+              aria-current={item.version === version.version ? 'page' : undefined}
+              class="inline-flex min-h-11 items-center rounded-lg border border-border bg-surface px-4 text-sm transition-colors hover:bg-surface-2 aria-[current=page]:border-accent aria-[current=page]:text-accent"
+              set:html={withDigits(`الإصدار ${item.version}`)}
+            />
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}

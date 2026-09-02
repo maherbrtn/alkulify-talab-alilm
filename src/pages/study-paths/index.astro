@@ -1,0 +1,72 @@
+---
+import Base from '../../layouts/Base.astro'
+import { lessons, withDigits } from '../../lib/format'
+import { currentStudyPathHref, publicStudyPaths } from '../../lib/public-study-paths'
+import { SITE_URL, breadcrumb } from '../../lib/seo'
+
+const indexSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'CollectionPage',
+  '@id': `${SITE_URL}/study-paths/#collection`,
+  name: 'مسارات الدراسة',
+  inLanguage: 'ar',
+  mainEntity: {
+    '@type': 'ItemList',
+    numberOfItems: publicStudyPaths.length,
+    itemListElement: publicStudyPaths.map((path, index) => ({
+      '@type': 'ListItem',
+      position: index + 1,
+      url: new URL(currentStudyPathHref(path.slug), SITE_URL).href,
+      name: path.title,
+    })),
+  },
+}
+---
+
+<Base
+  title="مسارات الدراسة"
+  description="مسارات دراسة مرتبة من دروس الشيخ أبي جعفر الخليفي"
+  schema={[indexSchema, breadcrumb([['مسارات الدراسة', '/study-paths/']])]}
+>
+  <h1 class="mt-10 text-2xl font-semibold tracking-tight sm:text-3xl">مسارات الدراسة</h1>
+  <p class="mt-3 prose-read text-muted">
+    مناهج مرتبة في وحدات ودروس متتابعة، مع بقاء جميع الدروس متاحة للقراءة العامة.
+  </p>
+
+  {
+    publicStudyPaths.length === 0 ? (
+      <section class="card mt-8 p-6" aria-labelledby="study-paths-empty-heading">
+        <h2 id="study-paths-empty-heading" class="text-lg font-semibold">
+          لا توجد مسارات منشورة بعد
+        </h2>
+        <p class="mt-2 leading-loose text-muted">
+          ستظهر هنا المسارات العلمية بعد مراجعتها ونشرها. يمكنك الآن تصفح الدروس من القوائم.
+        </p>
+        <a
+          href="/p/"
+          class="mt-5 inline-flex min-h-11 items-center rounded-xl bg-accent px-5 font-medium text-accent-fg"
+        >
+          تصفح القوائم
+        </a>
+      </section>
+    ) : (
+      <ul class="mt-8 space-y-3">
+        {publicStudyPaths.map((path) => (
+          <li>
+            <a
+              href={currentStudyPathHref(path.slug)}
+              class="card block p-5 transition-colors hover:bg-surface-2 sm:p-6"
+            >
+              <span class="block text-lg font-semibold leading-relaxed">{path.title}</span>
+              <span class="mt-2 block leading-loose text-muted">{path.description}</span>
+              <span
+                class="mt-3 block text-sm text-muted"
+                set:html={withDigits(`${lessons(path.lessonCount)} · ${path.current.modules.length} وحدة`)}
+              />
+            </a>
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</Base>

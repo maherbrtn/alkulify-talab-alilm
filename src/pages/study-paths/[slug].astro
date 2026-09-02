@@ -1,0 +1,34 @@
+---
+import StudyPathVersion from '../../components/StudyPathVersion.astro'
+import Base from '../../layouts/Base.astro'
+import {
+  currentStudyPathHref,
+  publicStudyPathCurrentRouteEntries,
+  type PublicStudyPath,
+} from '../../lib/public-study-paths'
+import { SITE_URL, breadcrumb } from '../../lib/seo'
+
+export function getStaticPaths() {
+  return publicStudyPathCurrentRouteEntries()
+}
+
+const { path } = Astro.props as { path: PublicStudyPath }
+const route = currentStudyPathHref(path.slug)
+const schema = {
+  '@context': 'https://schema.org',
+  '@type': 'Course',
+  '@id': `${new URL(route, SITE_URL).href}#course`,
+  name: path.title,
+  description: path.description,
+  inLanguage: 'ar',
+  url: new URL(route, SITE_URL).href,
+}
+---
+
+<Base
+  title={path.title}
+  description={path.description}
+  schema={[schema, breadcrumb([['مسارات الدراسة', '/study-paths/'], [path.title, route]])]}
+>
+  <StudyPathVersion path={path} version={path.current} />
+</Base>
