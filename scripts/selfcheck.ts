@@ -31,6 +31,13 @@ import {
   type StudyPathVersion,
 } from '../src/lib/study-paths.ts'
 import {
+  assertStudyPathPublicationRegistry,
+  createPublicStudyPathPublicationManifest,
+  createStudyPathPublicationManifest,
+  verifyStudyPathPublicationRegistry,
+  type StudyPathPublicationRegistryRow,
+} from '../src/lib/study-path-publication.ts'
+import {
   createPublicStudyPathCatalog,
   currentStudyPathHref,
   historicalStudyPathHref,
@@ -561,6 +568,63 @@ const publicStudyPathFixture = {
   versions: [studyPathVersion, historicalStudyPathVersion],
 }
 const publicFixtureCatalog = createPublicStudyPathCatalog([publicStudyPathFixture])
+const publicationManifest = await createStudyPathPublicationManifest([publicStudyPathFixture])
+assert.deepEqual(await createPublicStudyPathPublicationManifest(), [])
+assert.equal(publicationManifest.length, publicStudyPathFixture.versions.length)
+assert.ok(publicationManifest.every((publication) => /^[0-9a-f]{64}$/.test(publication.definition_digest)))
+assert.deepEqual(
+  publicationManifest.map(({ path_id, version }) => ({ path_id, version })),
+  publicStudyPathFixture.versions.map((version) => ({
+    path_id: publicStudyPathFixture.pathId,
+    version: version.version,
+  })),
+)
+await assert.rejects(
+  () => createStudyPathPublicationManifest([studyPathFixtureDraft]),
+  /only published study paths can enter the publication manifest/,
+)
+await assert.rejects(
+  () => createStudyPathPublicationManifest([publicStudyPathFixture, publicStudyPathFixture]),
+  /duplicate study path publication/,
+)
+const registryRows: StudyPathPublicationRegistryRow[] = publicationManifest.map((publication) => ({
+  ...publication,
+  retired_at: null,
+}))
+assert.deepEqual(verifyStudyPathPublicationRegistry(publicationManifest, registryRows), [])
+assert.doesNotThrow(() => assertStudyPathPublicationRegistry(publicationManifest, registryRows))
+const retiredRegistryRows = registryRows.map((row, index) => ({
+  ...row,
+  retired_at: index === 0 ? '2026-09-02T00:00:00.000Z' : null,
+}))
+assert.deepEqual(verifyStudyPathPublicationRegistry(publicationManifest, retiredRegistryRows), [])
+const digestMismatchRows = registryRows.map((row, index) => ({
+  ...row,
+  definition_digest: index === 0 ? '0'.repeat(64) : row.definition_digest,
+}))
+assert.deepEqual(
+  verifyStudyPathPublicationRegistry(publicationManifest, digestMismatchRows).map(
+    (issue) => issue.code,
+  ),
+  ['digest_mismatch'],
+)
+assert.throws(
+  () => assertStudyPathPublicationRegistry(publicationManifest, digestMismatchRows),
+  /digest_mismatch/,
+)
+assert.deepEqual(
+  verifyStudyPathPublicationRegistry(publicationManifest, [registryRows[0], registryRows[0]]).map(
+    (issue) => issue.code,
+  ),
+  ['duplicate', 'missing'],
+)
+assert.throws(
+  () =>
+    verifyStudyPathPublicationRegistry(publicationManifest, [
+      { ...registryRows[0], retired_at: '2026-08-01T00:00:00.000Z' },
+    ]),
+  /retired_at must not precede published_at/,
+)
 const publicFixturePath = publicStudyPathBySlug(studyPathFixture.slug, publicFixtureCatalog)!
 assert.equal(publicFixturePath.current.version, 2)
 assert.equal(publicStudyPathVersion(studyPathFixture.slug, 1, publicFixtureCatalog)?.version, 1)
@@ -1530,5 +1594,63 @@ assert.match(
 assert.match(lessonProgressSql, /trigger lesson_progress_reject_user_id_change/)
 assert.match(lessonProgressSql, /revoke all on function public\.merge_lesson_progress\([\s\S]*from anon/)
 assert.match(lessonProgressSql, /grant execute on function public\.merge_lesson_progress\([\s\S]*to authenticated/)
+
+// Study Path publication is a migration-controlled identity/digest registry, not a curriculum
+// copy or browser API. Static checks pin the minimal schema, write denial, and one-way lifecycle.
+const studyPathVersionsSql = readFileSync(
+  new URL('../supabase/migrations/20260902000000_study_path_versions.sql', import.meta.url),
+  'utf8',
+)
+assert.match(studyPathVersionsSql, /create table public\.study_path_versions/)
+for (const column of [
+  'path_id uuid not null',
+  'version integer not null',
+  'definition_digest text not null',
+  'published_at timestamptz not null',
+  'retired_at timestamptz',
+]) {
+  assert.match(studyPathVersionsSql, new RegExp(column))
+}
+assert.match(studyPathVersionsSql, /primary key \(path_id, version\)/)
+assert.match(studyPathVersionsSql, /check \(version > 0\)/)
+assert.match(studyPathVersionsSql, /definition_digest ~ '\^\[0-9a-f\]\{64\}\$'/)
+assert.match(studyPathVersionsSql, /retired_at >= published_at/)
+assert.match(studyPathVersionsSql, /alter table public\.study_path_versions enable row level security/)
+for (const role of ['public', 'anon', 'authenticated']) {
+  assert.match(
+    studyPathVersionsSql,
+    new RegExp(`revoke all on table public\\.study_path_versions from ${role}`),
+  )
+}
+assert.match(studyPathVersionsSql, /revoke all on table public\.study_path_versions from service_role/)
+assert.match(studyPathVersionsSql, /grant select on table public\.study_path_versions to service_role/)
+assert.doesNotMatch(studyPathVersionsSql, /grant\s+(?:insert|update|delete|all)/i)
+assert.doesNotMatch(studyPathVersionsSql, /create policy/i)
+assert.doesNotMatch(
+  studyPathVersionsSql,
+  /modules?|lessons?|objectives?|titles?|descriptions?|slugs?|youtube|telegram|corpus|provider|jsonb?/i,
+)
+assert.match(studyPathVersionsSql, /function public\.study_path_versions_enforce_immutability\(\)/)
+assert.match(studyPathVersionsSql, /security invoker\s+set search_path = ''/)
+assert.match(studyPathVersionsSql, /new\.definition_digest is distinct from old\.definition_digest/)
+assert.match(studyPathVersionsSql, /old\.retired_at is not null/)
+assert.match(studyPathVersionsSql, /trigger study_path_versions_reject_delete/)
+assert.doesNotMatch(studyPathVersionsSql, /study_path_enrollments/)
+
+const studyPathPublicationVerificationSource = readFileSync(
+  new URL('../scripts/verify-study-path-publications.ts', import.meta.url),
+  'utf8',
+)
+assert.match(studyPathPublicationVerificationSource, /SUPABASE_SERVICE_ROLE_KEY/)
+assert.match(
+  studyPathPublicationVerificationSource,
+  /\.from\('study_path_versions'\)[\s\S]*\.select\('path_id,version,definition_digest,published_at,retired_at'\)/,
+)
+assert.match(studyPathPublicationVerificationSource, /createPublicStudyPathPublicationManifest\(\)/)
+assert.match(studyPathPublicationVerificationSource, /assertStudyPathPublicationRegistry\(manifest, data/)
+assert.doesNotMatch(
+  studyPathPublicationVerificationSource,
+  /insert\s*\(|update\s*\(|upsert\s*\(|delete\s*\(|rpc\s*\(/i,
+)
 
 console.log('selfcheck ok')

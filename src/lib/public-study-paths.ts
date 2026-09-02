@@ -110,7 +110,7 @@ export function createPublicStudyPathCatalog(
 
 // Add reviewed, scholarly definitions here only after they are genuinely publishable.
 // The technical draft fixture deliberately never enters this public source list.
-const publicStudyPathDefinitions: readonly unknown[] = []
+export const publicStudyPathDefinitions: readonly unknown[] = []
 
 export const publicStudyPaths = createPublicStudyPathCatalog(publicStudyPathDefinitions)
 

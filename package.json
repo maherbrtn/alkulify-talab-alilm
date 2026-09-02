@@ -20,6 +20,7 @@
     "embed": "tsx --env-file-if-exists=.env scripts/embed.ts",
     "ingest": "pnpm data && pnpm articles && pnpm telegram && pnpm index",
     "check": "tsx scripts/selfcheck.ts",
+    "verify:study-path-publications": "tsx --env-file-if-exists=.env.local scripts/verify-study-path-publications.ts",
     "verify": "tsx --env-file-if-exists=.env scripts/verify-batch.ts",
     "eval": "tsx --env-file-if-exists=.env scripts/eval.ts"
   },
