@@ -1,15 +1,15 @@
 # خطة: 04 — مسارات الدراسة V1
 
-- الحالة: `نشطة — Slice 3 مكتملة محليًا؛ التطبيق المستضاف معلق`
+- الحالة: `نشطة — Slice 3V مكتملة محليًا ومستضافًا؛ Slice 4 لم تبدأ`
 - المالك: `Codex / صاحب المشروع`
-- آخر تحديث: `2026-09-02`
+- آخر تحديث: `2026-09-03`
 - ملف الوحدة: `docs/project/06-STUDY-PATHS.md`
 
 ## الهدف ومعيار الاكتمال
 
 إضافة مسارات دراسة عامة ومنظمة فوق الدروس الحالية، مع تسجيل خاص بالطالب مثبت على إصدار منهج غير قابل للتغيير، ومن دون إنشاء مصدر ثانٍ لاكتمال الدرس أو ربط المسار بمزود محتوى. يكتمل V1 عندما يمكن نشر تعريفات ثابتة بإصدارات، وتسجيل الطالب في عدة مسارات نشطة بالتوازي، واشتقاق تقدم كل مسار ووحداته من `lesson_progress`، وعرض «تابع المسار» لكل تسجيل نشط مع بقاء Continue العام والدروس الأخيرة مستقلين.
 
-بدأ التنفيذ واكتملت Slice 1 الخاصة بالمجال الثابت والاشتقاقات النقية، ثم Slice 2 لصفحات القراءة العامة static، ثم Slice 3 محليًا بالـpublication registry الأدنى والتحقق من تطابق digest. لم تطبق migration Slice 3 على Supabase المستضاف بعد، ولا توجد تسجيلات؛ Slice 4 لا تبدأ قبل مراجعة بوابة Slice 3 وتطبيقها المستضاف الآمن.
+بدأ التنفيذ واكتملت Slice 1 الخاصة بالمجال الثابت والاشتقاقات النقية، ثم Slice 2 لصفحات القراءة العامة static، ثم Slice 3V بالـpublication registry الأدنى. طبقت migration مستضافًا وتطابق تاريخ migrations، وثبتت البنية والقيود وACL/RLS وسلوك immutability/retirement باختبارات transaction آمنة. السجل مستضافًا فارغ مطابقةً لكتالوج Git المنشور الفارغ، ولا توجد تسجيلات. Slice 4 لم تبدأ.
 
 ## الحالة الأساسية ودليل المستودع
 
@@ -20,7 +20,7 @@
 - `lesson_progress` صف واحد لكل `(user_id, lesson_key)`؛ القراءة للمالك تحت RLS، والكتابة عبر `merge_lesson_progress` فقط، والاكتمال sticky وفق إشارة Player الحالية عند 90% أو نهاية التشغيل.
 - مساحة الطالب تقرأ التقدم السحابي وتحل metadata بكتالوج static، وتشتق Continue العام وRecent من دون كتابة أو مصالحة محلية.
 - توجد 109 قوائم تشغيل و582 درسًا في أكثر من قائمة. القوائم مادة تصفح وترتيب وليست مسارات دراسة وفق D-010.
-- يوجد الآن نموذج المجال في `src/lib/study-paths.ts` وfixture تقني draft في `src/lib/fixtures/study-path-v1.json` وتغطية regression في `scripts/selfcheck.ts`، وكتالوج عام يفشل مغلقًا أمام المسودات ويحل الدروس إلى routes وقت البناء، وصفحات static للفهرس والإصدار الحالي والتاريخي. أضيفت محليًا migration مستقلة لـ`study_path_versions` وverifier نقي للـmanifest مقابل snapshot registry، لكنهما غير مطبقين مستضافًا. لا توجد تسجيلات، والكتالوج العام فارغ عمدًا حتى يراجع مسار علمي حقيقي وينشر.
+- يوجد الآن نموذج المجال في `src/lib/study-paths.ts` وfixture تقني draft في `src/lib/fixtures/study-path-v1.json` وتغطية regression في `scripts/selfcheck.ts`، وكتالوج عام يفشل مغلقًا أمام المسودات ويحل الدروس إلى routes وقت البناء، وصفحات static للفهرس والإصدار الحالي والتاريخي. migration `study_path_versions` مطبقة ومتحققة مستضافًا، وverifier يقارن manifest Git بsnapshot registry. لا توجد تسجيلات، والكتالوج العام وregistry المستضاف فارغان عمدًا حتى يراجع مسار علمي حقيقي وينشر.
 
 ## النطاق
 
@@ -212,7 +212,7 @@ type StudyPathLesson = {
 - [x] publication check يقارن `(path_id, version, definition_digest)` مع Git.
 - [x] اختبارات immutability وretirement ومنع الكتابة من browser roles.
 
-بوابة Slice 3 المحلية: الجدول لا يحمل إلا الهوية والإصدار والـdigest ووقتي النشر/التقاعد، مع PK وقيود shape/time، وRLS بلا policies أو grants للمتصفح. يملك `service_role` قراءة صريحة فقط للتحقق التشغيلي، بينما تبقى الكتابة لمالك الجدول/migrations. triggers تمنع إعادة كتابة الهوية/الـdigest/وقت النشر، وتجعل retirement انتقالًا أحاديًا، وتمنع الحذف. يشتق verifier manifest من تعريفات Git المنشورة ويكشف duplicate/missing/unexpected/mismatch؛ يشغل المشرف `pnpm verify:study-path-publications` بمتغيري البيئة الإداريين لجلب snapshot الحقول الخمسة ومقارنته، من دون اتصال المتصفح أو render العام بالجدول. لم تطبق migration على المستضاف ولم يجر hosted verification، ولا تبدأ Slice 4 قبل ذلك.
+بوابة Slice 3V: الجدول المستضاف لا يحمل إلا الهوية والإصدار والـdigest ووقتي النشر/التقاعد، مع PK وقيود shape/time المتوقعة. RLS مفعل بلا policies؛ لا يملك `anon` أو `authenticated` أيًا من `SELECT/INSERT/UPDATE/DELETE`، ويملك `service_role` قراءة صريحة فقط. المالك `postgres`، وtrigger functions بـ`SECURITY INVOKER` و`search_path = ''`. أثبتت اختبارات transaction أن الإدخال الصالح ينجح، وأن الهوية والإصدار والـdigest ووقت النشر immutable، وأن retirement الصالح ينجح مرة واحدة فقط ولا يسبق النشر، وأن الحذف مرفوض. رفضت القيود الإصدار صفرًا، وdigest كبيرة الأحرف أو قصيرة، ووقت نشر لا نهائيًا. بعد rollback بقي registry صفر صفوف، وتطابقت migrations الأربع محليًا وبعيدًا. Slice 4 لم تبدأ.
 
 ### Slice 4 — التسجيلات وRLS/RPC
 
@@ -332,4 +332,4 @@ type StudyPathLesson = {
 
 ## النتيجة
 
-اكتملت Slice 1 عند `45291c9`: نموذج المجال static، والتحقق، والـcanonical digest، واشتقاقات التقدم وContinue، وتغطية التقدم السابق والمشترك. اكتملت Slice 2 عند `3ad64fc` بكتالوج وصفحات قراءة static من Git فقط، من دون نشر fixture المسودة كمنهج حقيقي. اكتملت Slice 3 محليًا بـmigration registry أدنى وverifier ثابت، مع بقاء التطبيق والتحقق المستضافين معلقين؛ Slice 4 وما بعدها غير منفذة.
+اكتملت Slice 1 عند `45291c9`: نموذج المجال static، والتحقق، والـcanonical digest، واشتقاقات التقدم وContinue، وتغطية التقدم السابق والمشترك. اكتملت Slice 2 عند `3ad64fc` بكتالوج وصفحات قراءة static من Git فقط، من دون نشر fixture المسودة كمنهج حقيقي. اكتملت Slice 3 محليًا عند `c8757fb` بـmigration registry أدنى وverifier ثابت، ثم أغلقت Slice 3V بتطبيق وتحقق مستضافين وregistry فارغ بلا بيانات صناعية؛ Slice 4 وما بعدها غير منفذة.
