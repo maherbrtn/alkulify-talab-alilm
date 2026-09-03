@@ -1,6 +1,6 @@
 # الحالة الحالية
 
-آخر تحقق وظيفي: 2026-09-03 على `develop` عند baseline `c8757fb` مع إغلاق Study Paths Slice 3V مستضافًا.
+آخر تحقق وظيفي: 2026-09-03 على `develop` عند baseline `d0b9b99` مع تغييرات Slice 4 غير الملتزمة بعد اكتمال تحققها المستضاف.
 
 ## يعمل الآن
 
@@ -14,20 +14,21 @@
 - يشتق `deriveStudyPathProgress()` اكتمال الدرس والوحدة والمسار والنسب وContinue الخاص بالمسار من `lesson_progress.completed` وترتيب الإصدار فقط، ويعيد استخدام resume الحالي. يحتسب التقدم السابق والمفتاح المشترك لأي مسار يحتويه بلا نسخ حالة تقدم، ويعيد snapshots مجمدة لصفوف التقدم بدل مراجع mutable يملكها المستدعي.
 - اكتملت Study Paths Slice 2 محليًا: كتالوج عام static لا يقبل إلا تعريفًا حالته `published`، وحل build-time من `lesson_key` إلى route الدرس الحالية، وفهرس وقوالب current/history عامة لا تستورد Auth أو Supabase. الكتالوج فارغ عمدًا حتى ينشر منهج علمي حقيقي؛ fixture التقني draft غير مكشوف كمسار إنتاجي.
 - اكتملت Study Paths Slice 3V محليًا ومستضافًا: registry بالحقول الخمسة الدنيا وPK على `(path_id, version)`، وRLS مفعل بلا policies، ولا privileges لـ`anon` أو `authenticated`، و`service_role` يملك `SELECT` فقط. ثبتت القيود وimmutability وretirement أحادي الاتجاه ورفض الحذف باختبارات transaction مستضافة، وبقي registry فارغًا بلا بيانات صناعية.
+- اكتملت Study Paths Slice 4 محليًا ومستضافًا بالمigration `20260903164705`: تسجيل الطالب مثبت على إصدار وبحالات `active | paused | withdrawn | superseded`، وRLS قراءة للمالك فقط، وبلا كتابة مباشرة للمتصفح. ثبتت فعليًا RPCs الـenroll/pause/resume/withdraw/upgrade، وعزل المالك والأدوار، والانتقالات والـidempotency والretirement وتعدد المسارات النشطة، مع rollback لكل البيانات الصناعية.
 - تحقق Supabase المستضاف مكتمل: Auth وprofile trigger وعزل RLS بين مستخدمين وRPC والقيود ومزامنة Player اختبرت فعليًا.
-- تاريخ migrations المحلي والبعيد متطابق للإصدارات `20260824000000`، `20260826000000`، `20260829000000`، و`20260902000000`؛ و`authenticated` يملك على `profiles` فقط `SELECT/INSERT/UPDATE`.
+- تاريخ migrations المحلي والبعيد متطابق للإصدارات `20260824000000`، `20260826000000`، `20260829000000`، `20260902000000`، و`20260903164705`؛ و`authenticated` يملك على `profiles` فقط `SELECT/INSERT/UPDATE`.
 - مزامنة upstream حتى `5dbed6d`.
 
 ## جزئي أو غير موجود
 
 - لا تشمل مساحة الطالب V1 ملاحظات أو محفوظات سحابية أو واجهة لمسارات الدراسة أو تقدم دورة ظاهرًا للمستخدم أو نسبة تقدم عامة للأرشيف أو دلالات reset/rewatch.
-- لا يوجد بعد مسار علمي منشور فعليًا أو واجهة تسجيل/تقدم Study Paths، ولا تسجيلات طالب أو RPC للمسارات. الـfixture الحالي تقني بحالة `draft` وليس مسارًا علميًا منشورًا، وقوائم التشغيل تبقى للتصفح والتسلسل فقط.
+- لا يوجد بعد مسار علمي منشور فعليًا أو واجهة تسجيل/تقدم Study Paths. مخطط/RPCs Slice 4 مستضافة ومتحققة، لكن لا توجد تسجيلات مستضافة؛ بقي `study_path_versions` و`study_path_enrollments` بصفر صفوف. الـfixture الحالي تقني بحالة `draft` وليس مسارًا علميًا منشورًا، وقوائم التشغيل تبقى للتصفح والتسلسل فقط.
 - لا توجد توصيات لمسارات الدراسة، ولا ينفذ هذا المستودع ingestion أو corpus خاصًا بـTelegram ضمن الميزة.
 - لا توجد Ask AI أو RAG؛ البحث الدلالي استرجاع فقط.
 
 ## الخطوة التالية
 
-بوابة Slice 3V مغلقة. Slice 4 للتسجيلات هي الخطوة التالية المخططة لكنها لم تبدأ؛ تبقى واجهة الطالب للشرائح اللاحقة، ثم Ask AI، من دون توسيع نطاق مساحة الطالب V1 ضمنيًا.
+Slice 4 مغلقة محليًا ومستضافًا. Slice 5 هي الخطوة المخططة التالية، لكنها لم تبدأ ضمن هذا العمل.
 
 ## عوائق ومخاطر نشطة
 
@@ -39,4 +40,4 @@
 
 نجح التحقق المتصفحي لمسار 03 الأساسي: لوحة authenticated، وContinue وRecent والاستئناف عبر Player، والخروج، وسطح المكتب والهاتف، ثم نجحت `pnpm check` و`pnpm build` و`pnpm exec tsc --noEmit` و`git diff --check`. لم تختبر يدويًا كل الحالات الطرفية؛ بقيت حالات صفر تقدم والمفاتيح المجهولة واكتمال الكل وخطأ/إعادة محاولة progress أو catalog غير منفذة متصفحيًا لعدم توفر حالة طبيعية أو حجب طلبات آمن، وهي مغطاة بمنطق نقي وselfchecks مقبولة.
 
-تغطي selfchecks الخاصة بـStudy Paths صلاحية الهوية والإصدار والحالة والبنية والترتيب وعدم التكرار، وحل `lesson_key`، وثبات canonical form والـdigest، وتأثره بكل بنية منهجية مهمة دون metadata العرض، واشتقاق التقدم وContinue، وفلترة النشر وroute resolution، وmanifest/registry duplicate/missing/mismatch/retirement، وبنية migration وgrants/RLS/immutability ومنع حقول المنهج والمزود.
+تغطي selfchecks الخاصة بـStudy Paths صلاحية الهوية والإصدار والحالة والبنية والترتيب وعدم التكرار، وحل `lesson_key`، وثبات canonical form والـdigest، وتأثره بكل بنية منهجية مهمة دون metadata العرض، واشتقاق التقدم وContinue، وفلترة النشر وroute resolution، وmanifest/registry duplicate/missing/mismatch/retirement. وتغطي كذلك شكل enrollment migration وFK/unique/indexes وعدم وجود progress/provider fields أو one-active constraint، وowner RLS/grants، وتواقيع RPCs و`auth.uid()`/`search_path`/EXECUTE، ودلالات transitions/idempotency/concurrency القابلة للإثبات ساكنًا.

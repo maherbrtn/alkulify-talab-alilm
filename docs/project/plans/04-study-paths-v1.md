@@ -1,6 +1,6 @@
 # خطة: 04 — مسارات الدراسة V1
 
-- الحالة: `نشطة — Slice 3V مكتملة محليًا ومستضافًا؛ Slice 4 لم تبدأ`
+- الحالة: `نشطة — Slice 4 مكتملة محليًا ومستضافًا؛ Slice 5 لم تبدأ`
 - المالك: `Codex / صاحب المشروع`
 - آخر تحديث: `2026-09-03`
 - ملف الوحدة: `docs/project/06-STUDY-PATHS.md`
@@ -9,7 +9,7 @@
 
 إضافة مسارات دراسة عامة ومنظمة فوق الدروس الحالية، مع تسجيل خاص بالطالب مثبت على إصدار منهج غير قابل للتغيير، ومن دون إنشاء مصدر ثانٍ لاكتمال الدرس أو ربط المسار بمزود محتوى. يكتمل V1 عندما يمكن نشر تعريفات ثابتة بإصدارات، وتسجيل الطالب في عدة مسارات نشطة بالتوازي، واشتقاق تقدم كل مسار ووحداته من `lesson_progress`، وعرض «تابع المسار» لكل تسجيل نشط مع بقاء Continue العام والدروس الأخيرة مستقلين.
 
-بدأ التنفيذ واكتملت Slice 1 الخاصة بالمجال الثابت والاشتقاقات النقية، ثم Slice 2 لصفحات القراءة العامة static، ثم Slice 3V بالـpublication registry الأدنى. طبقت migration مستضافًا وتطابق تاريخ migrations، وثبتت البنية والقيود وACL/RLS وسلوك immutability/retirement باختبارات transaction آمنة. السجل مستضافًا فارغ مطابقةً لكتالوج Git المنشور الفارغ، ولا توجد تسجيلات. Slice 4 لم تبدأ.
+بدأ التنفيذ واكتملت Slices 1–3V، ثم اكتملت Slice 4 محليًا ومستضافًا بجدول `study_path_enrollments` وRLS/RPCs للتسجيل وpause/resume/withdraw/upgrade. لا تخزن الشريحة progress أو completion أو تفاصيل المنهج، ولا تقيد تعدد المسارات النشطة. Slice 5 لم تبدأ.
 
 ## الحالة الأساسية ودليل المستودع
 
@@ -212,14 +212,22 @@ type StudyPathLesson = {
 - [x] publication check يقارن `(path_id, version, definition_digest)` مع Git.
 - [x] اختبارات immutability وretirement ومنع الكتابة من browser roles.
 
-بوابة Slice 3V: الجدول المستضاف لا يحمل إلا الهوية والإصدار والـdigest ووقتي النشر/التقاعد، مع PK وقيود shape/time المتوقعة. RLS مفعل بلا policies؛ لا يملك `anon` أو `authenticated` أيًا من `SELECT/INSERT/UPDATE/DELETE`، ويملك `service_role` قراءة صريحة فقط. المالك `postgres`، وtrigger functions بـ`SECURITY INVOKER` و`search_path = ''`. أثبتت اختبارات transaction أن الإدخال الصالح ينجح، وأن الهوية والإصدار والـdigest ووقت النشر immutable، وأن retirement الصالح ينجح مرة واحدة فقط ولا يسبق النشر، وأن الحذف مرفوض. رفضت القيود الإصدار صفرًا، وdigest كبيرة الأحرف أو قصيرة، ووقت نشر لا نهائيًا. بعد rollback بقي registry صفر صفوف، وتطابقت migrations الأربع محليًا وبعيدًا. Slice 4 لم تبدأ.
+بوابة Slice 3V: الجدول المستضاف لا يحمل إلا الهوية والإصدار والـdigest ووقتي النشر/التقاعد، مع PK وقيود shape/time المتوقعة. RLS مفعل بلا policies؛ لا يملك `anon` أو `authenticated` أيًا من `SELECT/INSERT/UPDATE/DELETE`، ويملك `service_role` قراءة صريحة فقط. المالك `postgres`، وtrigger functions بـ`SECURITY INVOKER` و`search_path = ''`. أثبتت اختبارات transaction أن الإدخال الصالح ينجح، وأن الهوية والإصدار والـdigest ووقت النشر immutable، وأن retirement الصالح ينجح مرة واحدة فقط ولا يسبق النشر، وأن الحذف مرفوض. رفضت القيود الإصدار صفرًا، وdigest كبيرة الأحرف أو قصيرة، ووقت نشر لا نهائيًا. بعد rollback بقي registry صفر صفوف، وتطابقت migrations الأربع محليًا وبعيدًا.
 
 ### Slice 4 — التسجيلات وRLS/RPC
 
-- [ ] migration مستقلة لـ`study_path_enrollments` والحالات الأربع وFK/RLS/grants.
-- [ ] RPCs للتسجيل وpause/resume وwithdraw/upgrade.
-- [ ] تحقق hosted من owner isolation ورفض anon/other-user والإصدار المزيف والمتقاعد.
-- [ ] إثبات عدة تسجيلات `active` للمستخدم نفسه؛ لا global focus ولا partial unique index.
+- [x] migration مستقلة لـ`study_path_enrollments` والحالات الأربع وFK/RLS/grants.
+- [x] RPCs للتسجيل وpause/resume وwithdraw/upgrade.
+- [x] تحقق hosted من owner isolation ورفض anon/other-user والإصدار المزيف والمتقاعد.
+- [x] إثبات عدة تسجيلات `active` للمستخدم نفسه؛ لا global focus ولا partial unique index.
+
+بوابة Slice 4 المحلية: التسجيل مثبت على `(path_id, path_version)` ومحمي بFK للـregistry وunique لكل `(user_id, path_id, path_version)`. يسمح RLS للمالك بالقراءة فقط، ولا grants مباشرة للكتابة. يملك `service_role` `SELECT` فقط، وتنفذ كل mutations عبر خمس RPCs مقيدة لـ`authenticated` تشتق `user_id` من `auth.uid()` ولا تقبل `p_user_id`.
+
+الدلالات المحددة: enroll المكرر يعيد الصف القائم إن كان `active/paused` ولا يعيد تنشيط terminal row. pause من `active` فقط، وresume من `paused` فقط مع حفظ `paused_at` كآخر وقت pause، وwithdraw من `active/paused` إلى terminal. upgrade من `active/paused` إلى إصدار آخر من المسار نفسه موجود وغير retired؛ ينشئ أو يعيد استخدام هدف `active`، ويعيد هدف `paused` إلى `active`، ويرفض هدفًا terminal، ثم يحول القديم إلى `superseded` ويربطه. إعادة upgrade نفسها idempotent، وهدف مختلف بعد supersession مرفوض. يبقى `withdrawn/superseded` terminal، ويمنع retirement تسجيلًا أو هدف upgrade جديدًا ولا يغير تسجيلًا قائمًا.
+
+يضبط trigger `updated_at`، ويبقى `paused_at` تاريخيًا بعد resume. يتسلسل enroll/upgrade لكل `(user,path)` بـtransaction advisory lock، ويتكفل unique + `ON CONFLICT` بالتكرار المتزامن، ويمنع `FOR SHARE` على صف registry سباق retirement. تحقق المستضاف من تعريفات الأقفال والمفتاح المشترك ولم ينفذ parallel stress test.
+
+بوابة Slice 4V: طبقت migration باسم التاريخ البعيد الفعلي `20260903164705_study_path_enrollments.sql`. المالك ومالكو RPCs/trigger function هم `postgres`؛ الدوال الخمس `SECURITY DEFINER` و`search_path = ''` وتنفيذها لـ`authenticated` فقط بلا overloads زائدة، وtrigger function `SECURITY INVOKER` غير قابلة للتنفيذ المباشر من أدوار المتصفح/service. أثبتت اختبارات rollback حالات enroll/pause/resume/withdraw/upgrade والـidempotency والterminal/retirement وعزل المالك وتعدد active وسلامة supersession وثبات الإصدار وmonotonicity. ثبتت ACL/RLS الفعلية، وبقي `study_path_versions` و`study_path_enrollments` بصفر صفوف.
 
 ### Slice 5 — واجهة التسجيل والمسار الخاص
 
@@ -332,4 +340,4 @@ type StudyPathLesson = {
 
 ## النتيجة
 
-اكتملت Slice 1 عند `45291c9`: نموذج المجال static، والتحقق، والـcanonical digest، واشتقاقات التقدم وContinue، وتغطية التقدم السابق والمشترك. اكتملت Slice 2 عند `3ad64fc` بكتالوج وصفحات قراءة static من Git فقط، من دون نشر fixture المسودة كمنهج حقيقي. اكتملت Slice 3 محليًا عند `c8757fb` بـmigration registry أدنى وverifier ثابت، ثم أغلقت Slice 3V بتطبيق وتحقق مستضافين وregistry فارغ بلا بيانات صناعية؛ Slice 4 وما بعدها غير منفذة.
+اكتملت Slice 1 عند `45291c9`: نموذج المجال static، والتحقق، والـcanonical digest، واشتقاقات التقدم وContinue، وتغطية التقدم السابق والمشترك. اكتملت Slice 2 عند `3ad64fc` بكتالوج وصفحات قراءة static من Git فقط، من دون نشر fixture المسودة كمنهج حقيقي. اكتملت Slice 3 محليًا عند `c8757fb` بـmigration registry أدنى وverifier ثابت، ثم أغلقت Slice 3V بتطبيق وتحقق مستضافين. أغلقت Slice 4 محليًا ومستضافًا بmigration التسجيل وخمس RPCs محمية، وبقيت الجداول فارغة بعد rollback؛ Slice 5 وما بعدها غير منفذة.

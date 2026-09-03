@@ -1653,4 +1653,219 @@ assert.doesNotMatch(
   /insert\s*\(|update\s*\(|upsert\s*\(|delete\s*\(|rpc\s*\(/i,
 )
 
+// Study Path enrollments pin an owner to one immutable published version. The
+// table stores lifecycle only; writes are owner-derived RPCs and never duplicate
+// lesson completion/progress state.
+const studyPathEnrollmentsSql = readFileSync(
+  new URL(
+    '../supabase/migrations/20260903164705_study_path_enrollments.sql',
+    import.meta.url,
+  ),
+  'utf8',
+)
+assert.match(studyPathEnrollmentsSql, /create table public\.study_path_enrollments/)
+for (const column of [
+  'id uuid primary key',
+  'user_id uuid not null',
+  'path_id uuid not null',
+  'path_version integer not null',
+  'state text not null',
+  'enrolled_at timestamptz not null',
+  'updated_at timestamptz not null',
+  'paused_at timestamptz',
+  'withdrawn_at timestamptz',
+  'superseded_at timestamptz',
+  'superseded_by_enrollment_id uuid',
+]) {
+  assert.match(studyPathEnrollmentsSql, new RegExp(column))
+}
+assert.match(
+  studyPathEnrollmentsSql,
+  /state in \('active', 'paused', 'withdrawn', 'superseded'\)/,
+)
+assert.match(
+  studyPathEnrollmentsSql,
+  /foreign key \(path_id, path_version\)[\s\S]*references public\.study_path_versions\(path_id, version\)/,
+)
+assert.match(
+  studyPathEnrollmentsSql,
+  /unique \(user_id, path_id, path_version\)/,
+)
+assert.match(
+  studyPathEnrollmentsSql,
+  /foreign key \(superseded_by_enrollment_id\)[\s\S]*references public\.study_path_enrollments\(id\)/,
+)
+assert.match(studyPathEnrollmentsSql, /study_path_enrollments_path_version_idx/)
+assert.match(studyPathEnrollmentsSql, /study_path_enrollments_superseded_by_idx/)
+assert.doesNotMatch(studyPathEnrollmentsSql, /create\s+unique\s+index[\s\S]*state\s*=\s*'active'/i)
+assert.doesNotMatch(studyPathEnrollmentsSql, /unique\s*\([^)]*state/i)
+assert.doesNotMatch(
+  studyPathEnrollmentsSql,
+  /^\s*(?:progress|progress_percentage|completed|current_lesson|provider_id|curriculum)\s+/im,
+)
+assert.doesNotMatch(studyPathEnrollmentsSql, /youtube|telegram|corpus|jsonb/i)
+for (const timestamp of [
+  'enrolled_at',
+  'updated_at',
+  'paused_at',
+  'withdrawn_at',
+  'superseded_at',
+]) {
+  assert.match(studyPathEnrollmentsSql, new RegExp(`${timestamp}[^;]*?_at_(?:finite|valid)`, 's'))
+}
+assert.match(studyPathEnrollmentsSql, /updated_at >= enrolled_at/)
+assert.match(studyPathEnrollmentsSql, /state <> 'paused' or paused_at is not null/)
+assert.match(studyPathEnrollmentsSql, /state = 'withdrawn'\) = \(withdrawn_at is not null/)
+assert.match(studyPathEnrollmentsSql, /state = 'superseded'[\s\S]*superseded_at is not null/)
+assert.match(
+  studyPathEnrollmentsSql,
+  /alter table public\.study_path_enrollments enable row level security/,
+)
+for (const role of ['public', 'anon', 'authenticated', 'service_role']) {
+  assert.match(
+    studyPathEnrollmentsSql,
+    new RegExp(`revoke all on table public\\.study_path_enrollments from ${role}`),
+  )
+}
+assert.match(
+  studyPathEnrollmentsSql,
+  /grant select on table public\.study_path_enrollments to authenticated/,
+)
+assert.match(
+  studyPathEnrollmentsSql,
+  /grant select on table public\.study_path_enrollments to service_role/,
+)
+assert.doesNotMatch(
+  studyPathEnrollmentsSql,
+  /grant\s+(?:insert|update|delete|all)[^;]*study_path_enrollments/i,
+)
+assert.match(studyPathEnrollmentsSql, /create policy "study_path_enrollments_select_own"/)
+assert.match(studyPathEnrollmentsSql, /using \(\(select auth\.uid\(\)\) = user_id\)/)
+assert.doesNotMatch(studyPathEnrollmentsSql, /create policy "[^"]*(?:insert|update|delete)/i)
+assert.match(studyPathEnrollmentsSql, /trigger study_path_enrollments_validate_lifecycle/)
+assert.match(studyPathEnrollmentsSql, /trigger study_path_enrollments_set_updated_at/)
+assert.doesNotMatch(studyPathEnrollmentsSql, /delete from public\.study_path_enrollments/i)
+assert.match(studyPathEnrollmentsSql, /old\.state in \('withdrawn', 'superseded'\)/)
+assert.match(studyPathEnrollmentsSql, /new\.path_version is distinct from old\.path_version/)
+assert.match(studyPathEnrollmentsSql, /new\.updated_at < old\.updated_at/)
+assert.match(
+  studyPathEnrollmentsSql,
+  /target\.user_id = new\.user_id[\s\S]*target\.path_id = new\.path_id[\s\S]*target\.path_version <> new\.path_version[\s\S]*target\.state = 'active'/,
+)
+
+const enrollmentRpcs = [
+  {
+    name: 'enroll_study_path',
+    declaration: /\(\s*p_path_id uuid,\s*p_path_version integer\s*\)/,
+    signature: 'uuid, integer',
+  },
+  {
+    name: 'pause_study_path_enrollment',
+    declaration: /\(\s*p_enrollment_id uuid\s*\)/,
+    signature: 'uuid',
+  },
+  {
+    name: 'resume_study_path_enrollment',
+    declaration: /\(\s*p_enrollment_id uuid\s*\)/,
+    signature: 'uuid',
+  },
+  {
+    name: 'withdraw_study_path_enrollment',
+    declaration: /\(\s*p_enrollment_id uuid\s*\)/,
+    signature: 'uuid',
+  },
+  {
+    name: 'upgrade_study_path_enrollment',
+    declaration: /\(\s*p_enrollment_id uuid,\s*p_target_path_version integer\s*\)/,
+    signature: 'uuid, integer',
+  },
+]
+
+function enrollmentRpcDefinition(name: string): string {
+  const startMarker = `create or replace function public.${name}(`
+  const start = studyPathEnrollmentsSql.indexOf(startMarker)
+  assert.notEqual(start, -1, `${name} definition is missing`)
+  const end = studyPathEnrollmentsSql.indexOf('\n$$;', start)
+  assert.notEqual(end, -1, `${name} definition is unterminated`)
+  return studyPathEnrollmentsSql.slice(start, end + '\n$$;'.length)
+}
+
+for (const { name, declaration, signature } of enrollmentRpcs) {
+  const escapedSignature = signature.replace(/[()]/g, '\\$&')
+  assert.match(
+    studyPathEnrollmentsSql,
+    new RegExp(`revoke all on function public\\.${name}\\(${escapedSignature}\\) from public`),
+  )
+  assert.match(
+    studyPathEnrollmentsSql,
+    new RegExp(`revoke all on function public\\.${name}\\(${escapedSignature}\\) from anon`),
+  )
+  assert.match(
+    studyPathEnrollmentsSql,
+    new RegExp(`revoke all on function public\\.${name}\\(${escapedSignature}\\) from authenticated`),
+  )
+  assert.match(
+    studyPathEnrollmentsSql,
+    new RegExp(`revoke all on function public\\.${name}\\(${escapedSignature}\\) from service_role`),
+  )
+  assert.match(
+    studyPathEnrollmentsSql,
+    new RegExp(`grant execute on function public\\.${name}\\(${escapedSignature}\\) to authenticated`),
+  )
+
+  const definition = enrollmentRpcDefinition(name)
+  assert.match(definition, declaration)
+  assert.match(definition, /returns public\.study_path_enrollments/)
+  assert.match(definition, /language plpgsql\s+security definer\s+set search_path = ''/)
+  assert.match(definition, /v_user_id uuid := auth\.uid\(\)/)
+  assert.match(definition, /if v_user_id is null then/)
+  assert.doesNotMatch(definition, /p_user_id/)
+  assert.doesNotMatch(definition, /\bexecute\b|\bformat\s*\(/i)
+  assert.doesNotMatch(definition, /\b(?:from|update|insert into)\s+study_path_/i)
+}
+assert.doesNotMatch(studyPathEnrollmentsSql, /p_user_id/)
+assert.match(studyPathEnrollmentsSql, /pg_catalog\.pg_advisory_xact_lock/)
+assert.match(studyPathEnrollmentsSql, /from public\.study_path_versions as versions[\s\S]*for share/)
+assert.match(
+  studyPathEnrollmentsSql,
+  /on conflict \(user_id, path_id, path_version\) do nothing/,
+)
+assert.match(studyPathEnrollmentsSql, /versions\.retired_at/)
+assert.match(studyPathEnrollmentsSql, /terminal enrollment cannot be reactivated/)
+assert.match(studyPathEnrollmentsSql, /only an active enrollment can be paused/)
+assert.match(studyPathEnrollmentsSql, /only a paused enrollment can be resumed/)
+assert.match(
+  studyPathEnrollmentsSql,
+  /only an active or paused enrollment can be withdrawn/,
+)
+assert.match(studyPathEnrollmentsSql, /set state = 'active'/)
+assert.match(
+  studyPathEnrollmentsSql,
+  /state = 'superseded',[\s\S]*superseded_by_enrollment_id = v_target\.id/,
+)
+assert.match(studyPathEnrollmentsSql, /superseded enrollment cannot be upgraded again/)
+assert.match(
+  enrollmentRpcDefinition('upgrade_study_path_enrollment'),
+  /enrollments\.id = v_source\.superseded_by_enrollment_id[\s\S]*enrollments\.state = 'active'\s+for update/,
+)
+
+const supabaseTypesSource = readFileSync(
+  new URL('../src/lib/supabase.ts', import.meta.url),
+  'utf8',
+)
+assert.match(
+  supabaseTypesSource,
+  /StudyPathEnrollmentState = 'active' \| 'paused' \| 'withdrawn' \| 'superseded'/,
+)
+assert.match(supabaseTypesSource, /study_path_enrollments: \{[\s\S]*Row: StudyPathEnrollmentRow/)
+for (const rpc of [
+  'enroll_study_path',
+  'pause_study_path_enrollment',
+  'resume_study_path_enrollment',
+  'withdraw_study_path_enrollment',
+  'upgrade_study_path_enrollment',
+]) {
+  assert.match(supabaseTypesSource, new RegExp(`${rpc}: \\{`))
+}
+
 console.log('selfcheck ok')

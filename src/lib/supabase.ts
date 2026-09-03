@@ -18,6 +18,22 @@ export type LessonProgressRow = {
   updated_at: string
 }
 
+export type StudyPathEnrollmentState = 'active' | 'paused' | 'withdrawn' | 'superseded'
+
+export type StudyPathEnrollmentRow = {
+  id: string
+  user_id: string
+  path_id: string
+  path_version: number
+  state: StudyPathEnrollmentState
+  enrolled_at: string
+  updated_at: string
+  paused_at: string | null
+  withdrawn_at: string | null
+  superseded_at: string | null
+  superseded_by_enrollment_id: string | null
+}
+
 export type Database = {
   public: {
     Tables: {
@@ -59,6 +75,24 @@ export type Database = {
         }
         Relationships: []
       }
+      study_path_enrollments: {
+        Row: StudyPathEnrollmentRow
+        Insert: {
+          id?: string
+          user_id: string
+          path_id: string
+          path_version: number
+          state?: StudyPathEnrollmentState
+          enrolled_at?: string
+          updated_at?: string
+          paused_at?: string | null
+          withdrawn_at?: string | null
+          superseded_at?: string | null
+          superseded_by_enrollment_id?: string | null
+        }
+        Update: Partial<StudyPathEnrollmentRow>
+        Relationships: []
+      }
     }
     Views: Record<string, never>
     Functions: {
@@ -71,6 +105,26 @@ export type Database = {
           p_client_updated_at: string
         }
         Returns: LessonProgressRow
+      }
+      enroll_study_path: {
+        Args: { p_path_id: string; p_path_version: number }
+        Returns: StudyPathEnrollmentRow
+      }
+      pause_study_path_enrollment: {
+        Args: { p_enrollment_id: string }
+        Returns: StudyPathEnrollmentRow
+      }
+      resume_study_path_enrollment: {
+        Args: { p_enrollment_id: string }
+        Returns: StudyPathEnrollmentRow
+      }
+      withdraw_study_path_enrollment: {
+        Args: { p_enrollment_id: string }
+        Returns: StudyPathEnrollmentRow
+      }
+      upgrade_study_path_enrollment: {
+        Args: { p_enrollment_id: string; p_target_path_version: number }
+        Returns: StudyPathEnrollmentRow
       }
     }
     Enums: Record<string, never>
