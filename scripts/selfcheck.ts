@@ -1,6 +1,7 @@
 /** `pnpm check` — the smallest thing that fails if the text plumbing breaks. */
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { client, highlight, peek, rateLimited, search } from '../src/lib/meili.ts'
 import { normalize } from '../src/lib/normalize.ts'
 import { clean, mergeSegments } from '../src/lib/clean.ts'
@@ -1656,6 +1657,13 @@ assert.doesNotMatch(
 // Study Path enrollments pin an owner to one immutable published version. The
 // table stores lifecycle only; writes are owner-derived RPCs and never duplicate
 // lesson completion/progress state.
+// Migration order matters: inspect replacement definitions, not just Slice 4.
+const enrollmentMigrationDirectory = new URL('../supabase/migrations/', import.meta.url)
+const enrollmentMigrationSources = readdirSync(enrollmentMigrationDirectory)
+  .filter((name) => /^\d+_.+\.sql$/.test(name))
+  .sort()
+  .map((name) => readFileSync(new URL(name, enrollmentMigrationDirectory), 'utf8'))
+
 const studyPathEnrollmentsSql = readFileSync(
   new URL(
     '../supabase/migrations/20260903164705_study_path_enrollments.sql',
@@ -1781,13 +1789,146 @@ const enrollmentRpcs = [
   },
 ]
 
-function enrollmentRpcDefinition(name: string): string {
-  const startMarker = `create or replace function public.${name}(`
-  const start = studyPathEnrollmentsSql.indexOf(startMarker)
-  assert.notEqual(start, -1, `${name} definition is missing`)
-  const end = studyPathEnrollmentsSql.indexOf('\n$$;', start)
-  assert.notEqual(end, -1, `${name} definition is unterminated`)
-  return studyPathEnrollmentsSql.slice(start, end + '\n$$;'.length)
+// Repository-convention lexer, not an arbitrary PostgreSQL parser: ASCII dollar
+// tags and the existing SQL declaration conventions are supported.
+// Comments become whitespace, quoted tokens remain
+// opaque, and only unquoted semicolons separate top-level statements.
+function sqlTokens(sql: string): { text: string; kind: 'code' | 'quoted' | 'body' }[] {
+  const tokens: { text: string; kind: 'code' | 'quoted' | 'body' }[] = []
+  let i = 0
+  while (i < sql.length) {
+    const start = i
+    if (sql.startsWith('--', i)) {
+      while (i < sql.length && sql[i] !== '\n') i++
+      tokens.push({ text: sql.slice(start, i).replace(/[^\n]/g, ' '), kind: 'code' })
+    } else if (sql.startsWith('/*', i)) {
+      i += 2
+      let depth = 1
+      while (i < sql.length && depth) {
+        if (sql.startsWith('/*', i)) { depth++; i += 2 }
+        else if (sql.startsWith('*/', i)) { depth--; i += 2 }
+        else i++
+      }
+      assert.equal(depth, 0, 'Unterminated SQL block comment')
+      tokens.push({ text: sql.slice(start, i).replace(/[^\n]/g, ' '), kind: 'code' })
+    } else if (sql[i] === "'" || sql[i] === '"') {
+      const quote = sql[i++]
+      const escaped = quote === "'" && /(?:^|[^\w$])[eE]$/.test(sql.slice(0, start))
+      let closed = false
+      while (i < sql.length) {
+        if (escaped && sql[i] === '\\') { i += 2; continue }
+        if (sql[i++] === quote) {
+          if (sql[i] === quote) { i++; continue }
+          closed = true
+          break
+        }
+      }
+      assert.ok(closed, 'Unterminated SQL quoted token')
+      tokens.push({ text: sql.slice(start, i), kind: 'quoted' })
+    } else {
+      const delimiter = (i === 0 || !/[\w$]/.test(sql[i - 1]))
+        ? sql.slice(i).match(/^\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$/)?.[0] : undefined
+      if (delimiter) {
+        const end = sql.indexOf(delimiter, i + delimiter.length)
+        assert.ok(end >= 0, 'Unterminated SQL dollar quote')
+        i = end + delimiter.length
+        tokens.push({ text: sql.slice(start, i), kind: 'body' })
+      } else {
+        tokens.push({ text: sql[i++], kind: 'code' })
+      }
+    }
+  }
+  return tokens
+}
+
+function sqlStatements(sql: string): string[] {
+  const statements: string[] = []
+  let current = ''
+  for (const token of sqlTokens(sql)) {
+    current += token.text
+    if (token.kind === 'code' && token.text === ';') {
+      if (current.trim()) statements.push(current.trim())
+      current = ''
+    }
+  }
+  if (current.trim()) statements.push(current.trim())
+  return statements
+}
+
+function executableSql(sql: string, unwrapBody = false): string {
+  return sqlTokens(sql).map((token) => {
+    if (unwrapBody && token.kind === 'body') {
+      const delimiter = token.text.match(/^\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$/)![0]
+      return executableSql(token.text.slice(delimiter.length, -delimiter.length))
+    }
+    return token.text
+  }).join('')
+}
+
+function enrollmentRpcStatement(name: string, sources = enrollmentMigrationSources): string {
+  const marker = new RegExp(`^create\\s+or\\s+replace\\s+function\\s+public\\.${name}\\s*\\(`)
+  const statement = sources.flatMap(sqlStatements).reverse().find((sql) => marker.test(sql))
+  assert.ok(statement, `${name} executable definition is missing`)
+  return statement
+}
+
+// Code view blanks ALL quoted data, preserving offsets/newlines. A separate
+// value view encodes only exact contract constants as @value@ tokens; arbitrary
+// literal contents can never supply SQL keywords or operators. Both views have
+// identical offsets, so ordering checks can safely use positions from either.
+function sqlViews(sql: string): { code: string; values: string } {
+  const constants = new Set(["''", "':'", "'active'", "'paused'", "'withdrawn'", "'superseded'", "'INSERT'"])
+  const tokens = sqlTokens(sql)
+  const blank = (text: string) => text.replace(/[^\n]/g, ' ')
+  return {
+    code: tokens.map((token) => token.kind === 'code' ? token.text : blank(token.text)).join(''),
+    values: tokens.map((token) => token.kind === 'code' ? token.text
+      : token.kind === 'quoted' && constants.has(token.text)
+        ? `@${token.text.slice(1, -1)}@` : blank(token.text)).join(''),
+  }
+}
+
+function sqlProgram(statement: string): { header: string; code: string; values: string } {
+  const tokens = sqlTokens(statement)
+  const bodies = tokens.filter((token) => token.kind === 'body')
+  assert.equal(bodies.length, 1, 'Expected one outer dollar-quoted program')
+  const body = bodies[0].text
+  const delimiter = body.match(/^\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$/)![0]
+  const header = sqlViews(tokens.slice(0, tokens.indexOf(bodies[0])).map((token) => token.text).join('')).values
+  assert.match(header, /(?:\bas|^do)\s*$/)
+  // Only the outer quote is unwrapped. Nested dollar strings are data.
+  return { header, ...sqlViews(body.slice(delimiter.length, -delimiter.length)) }
+}
+
+function validateEnrollmentAcl(sources: string[]): void {
+  const signatures = new Map<string, boolean>(enrollmentRpcs.map(({ name, signature }) =>
+    [`${name}(${signature.replace(/\s/g, '')})`, true] as const))
+  signatures.set('study_path_enrollments_enforce_lifecycle()', false)
+  const roles = ['public', 'anon', 'authenticated', 'service_role']
+  const final = new Map<string, Map<string, boolean>>()
+  for (const statement of sources.flatMap(sqlStatements)) {
+    if (!/^(?:grant|revoke)\b/i.test(statement)) continue
+    if (/\bon\s+table\b/i.test(statement)) continue
+    // Deliberately narrow ACL grammar: fail closed on unsupported function ACLs.
+    const match = statement.match(/^(grant|revoke)\s+(execute|all(?:\s+privileges)?)\s+on\s+function\s+public\.(\w+)\s*\(([^)]*)\)\s+(to|from)\s+([\w,\s]+);$/i)
+    assert.ok(match, `Unsupported function ACL statement: ${statement}`)
+    const [, action, , name, args, direction, recipients] = match
+    assert.equal(direction.toLowerCase(), action.toLowerCase() === 'grant' ? 'to' : 'from')
+    const signature = `${name.toLowerCase()}(${args.replace(/\s/g, '').toLowerCase()})`
+    assert.ok(signatures.has(signature), `Unexpected function signature: ${signature}`)
+    const state = final.get(signature) ?? new Map<string, boolean>()
+    for (const role of recipients.toLowerCase().split(',').map((value) => value.trim())) {
+      assert.ok(roles.includes(role), `Unexpected ACL role: ${role}`)
+      state.set(role, action.toLowerCase() === 'grant')
+    }
+    final.set(signature, state)
+  }
+  for (const [signature, browserRpc] of signatures) {
+    for (const role of roles) {
+      assert.equal(final.get(signature)?.get(role), browserRpc && role === 'authenticated',
+        `Final EXECUTE privilege: ${signature} / ${role}`)
+    }
+  }
 }
 
 for (const { name, declaration, signature } of enrollmentRpcs) {
@@ -1813,10 +1954,11 @@ for (const { name, declaration, signature } of enrollmentRpcs) {
     new RegExp(`grant execute on function public\\.${name}\\(${escapedSignature}\\) to authenticated`),
   )
 
-  const definition = enrollmentRpcDefinition(name)
-  assert.match(definition, declaration)
-  assert.match(definition, /returns public\.study_path_enrollments/)
-  assert.match(definition, /language plpgsql\s+security definer\s+set search_path = ''/)
+  const program = sqlProgram(enrollmentRpcStatement(name))
+  const definition = program.code
+  assert.match(program.header, declaration)
+  assert.match(program.header, /returns public\.study_path_enrollments/)
+  assert.match(program.header, /language plpgsql\s+security definer\s+set search_path = @@/)
   assert.match(definition, /v_user_id uuid := auth\.uid\(\)/)
   assert.match(definition, /if v_user_id is null then/)
   assert.doesNotMatch(definition, /p_user_id/)
@@ -1845,9 +1987,303 @@ assert.match(
 )
 assert.match(studyPathEnrollmentsSql, /superseded enrollment cannot be upgraded again/)
 assert.match(
-  enrollmentRpcDefinition('upgrade_study_path_enrollment'),
-  /enrollments\.id = v_source\.superseded_by_enrollment_id[\s\S]*enrollments\.state = 'active'\s+for update/,
+  sqlProgram(enrollmentRpcStatement('upgrade_study_path_enrollment')).values,
+  /enrollments\.id = v_source\.superseded_by_enrollment_id[\s\S]*enrollments\.state = @active@\s+for update/,
 )
+
+// Slice 4.1 static contract. These checks do not replace PostgreSQL runtime,
+// deferred-COMMIT, role, or two-session concurrency verification.
+const liveEnrollmentMigrationName =
+  '20260904195919_study_path_enrollments_one_live_forward_only.sql'
+const liveEnrollmentSql = readFileSync(
+  new URL(liveEnrollmentMigrationName, enrollmentMigrationDirectory),
+  'utf8',
+)
+assert.equal(
+  createHash('sha256').update(studyPathEnrollmentsSql).digest('hex'),
+  '8fe2e8865dbf52bcdefb5e35567c0f6d5b1705b47dcce472a10fafc66114d7ab',
+  'Applied Slice 4 migration must remain byte-for-byte unchanged',
+)
+function validateSlice41Migration(rawSql: string): void {
+  // CLI 2.116.0 qX: optional BOM, exact first line, optional trailing CR.
+  // This metadata is intentionally inspected BEFORE ordinary comment removal.
+  const firstLine = rawSql.replace(/^\uFEFF/, '').split('\n', 1)[0].replace(/\r$/, '')
+  assert.notEqual(firstLine, '-- pg-delta: transaction=false', 'Runner transaction mode must remain enabled')
+  const statements = sqlStatements(rawSql)
+  const liveEnrollmentSql = statements.map((statement) => sqlViews(statement).values).join('\n')
+  for (const statement of statements) {
+    assert.doesNotMatch(statement, /^(?:begin|start\s+transaction|commit|end|rollback|abort|savepoint|release|prepare\s+transaction)\b/i)
+    assert.doesNotMatch(statement, /^(?:create\s+(?:unique\s+)?index|drop\s+index|reindex|vacuum|alter\s+system|cluster)\b/i)
+  }
+  const lock = statements.findIndex((sql) => /^lock table public\.study_path_enrollments in access exclusive mode;$/.test(sql))
+  const auditPosition = statements.findIndex((sql) => /^do\s+\$/.test(sql))
+  assert.ok(lock >= 0 && auditPosition > lock, 'Lock must precede both audits')
+  assert.equal(statements.filter((sql) => /^do\s+\$/.test(sql)).length, 1)
+  const audit = sqlProgram(statements[auditPosition]).values
+  for (const [position, statement] of statements.entries()) {
+    if (/^(?:alter table|create or replace function)\b/i.test(statement)) {
+      assert.ok(position > auditPosition, 'Both audits must precede installation')
+    }
+  }
+  assert.match(audit, /where state in \(@active@, @paused@\)\s+group by user_id, path_id\s+having count\(\*\) > 1/)
+  assert.match(audit, /target\.user_id <> source\.user_id[\s\S]*target\.path_id <> source\.path_id[\s\S]*target\.path_version <= source\.path_version/)
+  assert.match(audit, /left join public\.study_path_enrollments as target[\s\S]*target\.id is null/)
+  assert.equal((audit.match(/raise exception/g) ?? []).length, 2)
+  assert.doesNotMatch(audit, /target\.state|\b(?:insert\s+into|update\s+public\.|delete\s+from|truncate)\b/i)
+
+  assert.match(
+    liveEnrollmentSql,
+    /alter table public\.study_path_enrollments\s+add constraint study_path_enrollments_one_live_per_path\s+exclude using btree \(user_id with =, path_id with =\)\s+where \(state in \(@active@, @paused@\)\)\s+deferrable initially deferred;/,
+  )
+  assert.equal((liveEnrollmentSql.match(/\badd constraint\b/g) ?? []).length, 1)
+  assert.doesNotMatch(liveEnrollmentSql, /\bcreate\s+(?:unique\s+)?index\b|\bcreate\s+extension\b|btree_gist|generated\s+always|add\s+column/i)
+  assert.doesNotMatch(liveEnrollmentSql, /unique\s*\(|exclude using \w+\s*\(\s*user_id with =\s*\)/i)
+  assert.doesNotMatch(liveEnrollmentSql, /drop constraint|alter constraint|create policy|grant\s+(?:insert|update|delete|all)\b/i)
+  assert.doesNotMatch(liveEnrollmentSql, /StudentHome|Player|lesson_progress|study-paths\/|Slice 5/i)
+  assert.match(studyPathEnrollmentsSql, /constraint study_path_enrollments_user_path_version_key\s+unique \(user_id, path_id, path_version\),/)
+
+  const enroll = sqlProgram(enrollmentRpcStatement('enroll_study_path', [rawSql]))
+  const effectiveEnroll = enroll.values
+  const upgrade = sqlProgram(enrollmentRpcStatement('upgrade_study_path_enrollment', [rawSql]))
+  const effectiveUpgrade = upgrade.values
+  const lifecycle = sqlProgram(enrollmentRpcStatement('study_path_enrollments_enforce_lifecycle', [rawSql]))
+  const effectiveLifecycle = lifecycle.values
+  for (const program of [enroll, upgrade]) {
+    const definition = program.code
+    assert.match(program.header, /language plpgsql\s+security definer\s+set search_path = @@/)
+    assert.match(definition, /v_user_id uuid := auth\.uid\(\)/)
+    assert.match(definition, /if v_user_id is null then/)
+    assert.doesNotMatch(definition, /p_user_id/)
+  }
+  for (const { name, declaration } of enrollmentRpcs.filter(({ name }) =>
+    name === 'enroll_study_path' || name === 'upgrade_study_path_enrollment')) {
+    assert.match(sqlProgram(enrollmentRpcStatement(name, [rawSql])).header, declaration)
+  }
+  const exactReturn = effectiveEnroll.indexOf('return v_result;')
+  const liveCheck = effectiveEnroll.indexOf('and enrollments.path_version <> p_path_version')
+  const publicationCheck = effectiveEnroll.indexOf('select versions.retired_at')
+  assert.ok(exactReturn > 0 && liveCheck > exactReturn && publicationCheck > liveCheck)
+  assert.match(effectiveEnroll.slice(0, exactReturn), /enrollments\.path_version = p_path_version\s+for update;[\s\S]*if v_result\.state in \(@withdrawn@, @superseded@\) then[\s\S]*raise exception/)
+  assert.match(effectiveEnroll, /perform 1\s+from public\.study_path_enrollments as enrollments\s+where enrollments\.user_id = v_user_id\s+and enrollments\.path_id = p_path_id\s+and enrollments\.path_version <> p_path_version\s+and enrollments\.state in \(@active@, @paused@\);\s+if found then\s+raise exception/)
+  assert.doesNotMatch(enroll.code, /\bupdate\s+public\.|set state|resume_study_path_enrollment/)
+  for (const [program, pathVariable] of [[enroll, 'p_path_id'], [upgrade, 'v_path_id']] as const) {
+    const definition = program.code
+    assert.ok(program.values.includes(`pg_catalog.hashtextextended(v_user_id::text || @:@ || ${pathVariable}::text, 0)`))
+    assert.match(definition, /pg_catalog\.pg_advisory_xact_lock/)
+    assert.match(definition, /from public\.study_path_versions as versions[\s\S]*for share;\s+if not found or v_retired_at is not null then/)
+    assert.match(definition, /on conflict \(user_id, path_id, path_version\) do nothing;/)
+    assert.equal((definition.match(/on conflict/g) ?? []).length, 1)
+    assert.doesNotMatch(definition, /set constraints|on conflict on constraint/i)
+  }
+  const forwardGuard = upgrade.code.indexOf('if p_target_path_version <= v_source.path_version then')
+  const repeatBranch = effectiveUpgrade.indexOf("if v_source.state = @superseded@ then")
+  assert.ok(forwardGuard > 0 && forwardGuard < repeatBranch)
+  assert.match(upgrade.code.slice(forwardGuard, repeatBranch), /raise exception\s+using errcode =\s*;/)
+  assert.doesNotMatch(upgrade.code, /p_target_path_version = v_source\.path_version|public\.enroll_study_path\(/)
+  assert.match(effectiveUpgrade, /if v_source\.state not in \(@active@, @paused@\) then/)
+  assert.match(effectiveUpgrade, /enrollments\.id = v_source\.superseded_by_enrollment_id[\s\S]*enrollments\.user_id = v_user_id[\s\S]*enrollments\.path_id = v_source\.path_id[\s\S]*enrollments\.path_version = p_target_path_version[\s\S]*enrollments\.state = @active@\s+for update;\s+if found then\s+return v_target;/)
+  const upgradeOrder = [
+    'pg_catalog.pg_advisory_xact_lock(',
+    'select enrollments.* into v_source',
+    'if p_target_path_version <=',
+    'select versions.retired_at',
+    'insert into public.study_path_enrollments',
+    "if v_target.state = @paused@ then",
+    "set state = @active@",
+    "state = @superseded@,",
+    'superseded_by_enrollment_id = v_target.id',
+  ].map((marker) => effectiveUpgrade.indexOf(marker))
+  assert.ok(upgradeOrder.every((position, i) => position >= 0 && (i === 0 || position > upgradeOrder[i - 1])))
+  assert.match(effectiveUpgrade, /elsif v_target\.state <> @active@ then\s+raise exception/)
+  assert.match(liveEnrollmentSql, /create trigger study_path_enrollments_validate_lifecycle\s+before insert or update on public\.study_path_enrollments\s+for each row execute function public\.study_path_enrollments_enforce_lifecycle\(\)/)
+  assert.doesNotMatch(liveEnrollmentSql, /drop trigger study_path_enrollments_set_updated_at/)
+  assert.match(lifecycle.header, /security invoker\s+set search_path = @@/)
+  const insertBranch = effectiveLifecycle.slice(effectiveLifecycle.indexOf("if tg_op = @INSERT@ then"), effectiveLifecycle.indexOf('\n  else'))
+  assert.match(insertBranch, /v_establish_supersession := new\.state = @superseded@/)
+  assert.doesNotMatch(insertBranch, /old\./)
+  assert.doesNotMatch(lifecycle.code.slice(0, effectiveLifecycle.indexOf('\n  else')), /old\./)
+  assert.match(effectiveLifecycle, /v_establish_supersession := old\.state in \(@active@, @paused@\)\s+and new\.state = @superseded@/)
+  assert.match(effectiveLifecycle, /if v_establish_supersession then[\s\S]*target\.id = new\.superseded_by_enrollment_id[\s\S]*target\.id <> new\.id[\s\S]*target\.user_id = new\.user_id[\s\S]*target\.path_id = new\.path_id[\s\S]*target\.path_version > new\.path_version[\s\S]*target\.state = @active@/)
+  assert.doesNotMatch(effectiveLifecycle, /target\.path_version <>/)
+  // Preserve every original UPDATE guard and state constant; diagnostic
+  // message contents are data, not part of the executable guard contract.
+  const originalLifecycle = sqlViews(studyPathEnrollmentsSql.slice(
+    studyPathEnrollmentsSql.indexOf('  if new.id is distinct'),
+    studyPathEnrollmentsSql.indexOf("  if old.state in ('active', 'paused') and new.state = 'superseded' then"),
+  )).values.trim().replace(/\s+/g, ' ')
+  assert.ok(effectiveLifecycle.replace(/\s+/g, ' ').includes(originalLifecycle))
+  for (const [name, signature] of [
+    ['study_path_enrollments_enforce_lifecycle', ''],
+    ['enroll_study_path', 'uuid, integer'],
+    ['upgrade_study_path_enrollment', 'uuid, integer'],
+  ]) {
+    for (const role of ['public', 'anon', 'authenticated', 'service_role']) {
+      assert.ok(statements.includes(`revoke all on function public.${name}(${signature}) from ${role};`))
+    }
+    if (signature) {
+      assert.ok(statements.includes(`grant execute on function public.${name}(${signature}) to authenticated;`))
+    }
+  }
+  validateEnrollmentAcl([studyPathEnrollmentsSql, rawSql])
+
+  assert.match(effectiveLifecycle, /target\.state = @active@\s+for share;\s+if not found then\s+raise exception/)
+}
+
+validateSlice41Migration(liveEnrollmentSql)
+
+// Mutations are strings only: no migration or repository files are rewritten.
+const slice41Statements = sqlStatements(liveEnrollmentSql)
+function commentOutSlice41Statement(pattern: RegExp): string {
+  const matches = slice41Statements.filter((statement) => pattern.test(statement))
+  assert.equal(matches.length, 1, `Mutation must select exactly one statement: ${pattern}`)
+  return slice41Statements.map((statement) => statement === matches[0]
+    ? `/* ${statement} */` : statement).join('\n')
+}
+function replaceSlice41Once(before: string, after: string): string {
+  assert.equal(liveEnrollmentSql.split(before).length, 2, 'Mutation target must be unique')
+  return liveEnrollmentSql.replace(before, after)
+}
+const slice41NegativeMutations: [string, string][] = [
+  ['A: commented exclusion', commentOutSlice41Statement(/^alter table public\.study_path_enrollments\s+add constraint/)],
+  ...['enroll_study_path', 'upgrade_study_path_enrollment', 'study_path_enrollments_enforce_lifecycle']
+    .map((name): [string, string] => [
+      `B/C/D: commented ${name}`,
+      commentOutSlice41Statement(new RegExp(`^create or replace function public\\.${name}\\(`)),
+    ]),
+  ['E: commented ACLs', slice41Statements.map((statement) => /^(?:revoke|grant)\b/.test(statement)
+    ? `/* ${statement} */` : statement).join('\n')],
+  ['F: comment-only deferral', replaceSlice41Once('deferrable initially deferred;', '/* deferrable initially deferred */;')],
+  ['G: comment-only forward guard', replaceSlice41Once(
+    "if p_target_path_version <= v_source.path_version then\n    raise exception 'upgrade target must be a greater path version' using errcode = '22023';\n  end if;",
+    "/* if p_target_path_version <= v_source.path_version then\n    raise exception 'upgrade target must be a greater path version' using errcode = '22023';\n  end if; */",
+  )],
+  ['H: comment-only lock', commentOutSlice41Statement(/^lock table /)],
+]
+for (const [name, sql] of slice41NegativeMutations) {
+  assert.throws(() => validateSlice41Migration(sql), name)
+}
+// I: comments cannot create executable transaction boundaries or forbidden DDL.
+validateSlice41Migration(`/* BEGIN; /* nested */ COMMIT; */\n-- ROLLBACK;\n${liveEnrollmentSql}\n/* VACUUM; CREATE INDEX CONCURRENTLY fake; */`)
+for (const forbidden of [
+  'BEGIN', 'START TRANSACTION', 'COMMIT', 'END', 'ROLLBACK',
+  'CREATE INDEX CONCURRENTLY fake ON public.study_path_enrollments (id)',
+  'DROP INDEX CONCURRENTLY fake', 'REINDEX INDEX CONCURRENTLY fake',
+  'VACUUM', "ALTER SYSTEM SET work_mem = '4MB'", 'CLUSTER public.study_path_enrollments',
+]) {
+  assert.throws(() => validateSlice41Migration(`${forbidden};\n${liveEnrollmentSql}`), forbidden)
+}
+// Quoting must protect comment markers and semicolons, including nested comments,
+// doubled quote escapes, E-string escapes, and arbitrary dollar tags.
+const lexicalFixture = String.raw`select '-- /* ; it''s */', "a""--/*;", E'escaped\'--/*;'; /* outer /* nested */ end */
+do $function$begin perform '--'; -- hidden
+end$function$; do $tag$begin /* hidden */ end$tag$; do $$begin end$$;`
+const lexicalStatements = sqlStatements(lexicalFixture)
+assert.equal(lexicalStatements.length, 4)
+assert.ok(lexicalStatements[0].includes("'-- /* ; it''s */'"))
+assert.ok(lexicalStatements[0].includes('"a""--/*;"'))
+assert.ok(lexicalStatements[0].includes(String.raw`E'escaped\'--/*;'`))
+assert.doesNotMatch(executableSql(lexicalStatements[1], true), /hidden/)
+assert.ok(executableSql(lexicalStatements[1], true).includes("'--'"))
+assert.doesNotMatch(executableSql(lexicalStatements[2], true), /hidden/)
+assert.match(executableSql('select 1/* nested /* x */ y */+2;'), /^select 1 +\+2;$/)
+assert.throws(() => sqlStatements('/* unfinished'))
+assert.throws(() => sqlStatements("select 'unfinished"))
+assert.throws(() => sqlStatements('do $tag$unfinished'))
+
+// Direct central-validator regressions: literal-only implementations must fail
+// for their own missing executable logic, independent of the older mutations.
+function quotedSqlData(text: string): string {
+  return `'${text.replace(/'/g, "''")}'`
+}
+function mutateSlice41(pattern: RegExp, replacement: (matched: string) => string): string {
+  const matches = [...liveEnrollmentSql.matchAll(new RegExp(pattern.source, 'g'))]
+  assert.equal(matches.length, 1, `Expected one mutation target: ${pattern}`)
+  const result = liveEnrollmentSql.replace(matches[0][0], replacement(matches[0][0]))
+  assert.notEqual(result, liveEnrollmentSql, 'Mutation must change the input')
+  return result
+}
+const forwardBlock = /if p_target_path_version <= v_source\.path_version then[\s\S]*?end if;/
+const advisoryBlock = /perform pg_catalog\.pg_advisory_xact_lock\(\s*pg_catalog\.hashtextextended\(v_user_id::text \|\| ':' \|\| p_path_id::text, 0\)\s*\);/
+const registryShare = /where versions\.path_id = p_path_id and versions\.version = p_path_version\s+for share;/
+const supersedeUpdate = /update public\.study_path_enrollments\s+set\s+state = 'superseded',[\s\S]*?where id = v_source\.id;/
+const literalMutations: [string, string][] = [
+  ['body A: guard in dollar literal', mutateSlice41(forwardBlock, (text) => `perform $review$${text}$review$;`)],
+  ['body B: guard in single literal', mutateSlice41(forwardBlock, (text) => `perform ${quotedSqlData(text)};`)],
+  ['body C: advisory call in literal', mutateSlice41(advisoryBlock, (text) => `perform ${quotedSqlData(text)};`)],
+  ['body D: FOR SHARE in literal', mutateSlice41(registryShare, (text) => text.replace('for share;', `;\n  perform 'for share';`))],
+  ['body D: FOR SHARE in comment', mutateSlice41(registryShare, (text) => text.replace('for share;', '/* for share */;'))],
+  ['body E: supersession UPDATE in literal', mutateSlice41(supersedeUpdate, (text) => `perform $review$${text}$review$;`)],
+]
+for (const [name, sql] of literalMutations) {
+  assert.throws(() => validateSlice41Migration(sql), name)
+}
+for (const text of [
+  'SET CONSTRAINTS is not allowed', '--', '/* */', 'commit', 'begin',
+  'grant execute on function public.enroll_study_path(uuid, integer) to anon;',
+]) {
+  const harmless = mutateSlice41(/if p_path_id is null/, () => `perform ${quotedSqlData(text)};\n  if p_path_id is null`)
+  assert.doesNotThrow(() => validateSlice41Migration(harmless), `Harmless body data: ${text}`)
+}
+const errorText = mutateSlice41(/raise exception 'authentication required' using errcode = '42501';\n  end if;\n  if p_path_id/,
+  (text) => text.replace("'authentication required'", "'SET CONSTRAINTS is not allowed'"))
+assert.doesNotThrow(() => validateSlice41Migration(errorText), 'Harmless error message')
+
+const enrollGrant = 'grant execute on function public.enroll_study_path(uuid, integer) to authenticated;'
+const enrollRevoke = 'revoke execute on function public.enroll_study_path(uuid, integer) from authenticated;'
+assert.equal(slice41Statements.filter((statement) => statement === enrollGrant).length, 1)
+const grantFirstStatements = slice41Statements.filter((statement) => statement !== enrollGrant)
+const firstEnrollRevoke = grantFirstStatements.findIndex((statement) => statement ===
+  'revoke all on function public.enroll_study_path(uuid, integer) from public;')
+assert.ok(firstEnrollRevoke >= 0)
+grantFirstStatements.splice(firstEnrollRevoke, 0, enrollGrant)
+const grantFirst = grantFirstStatements.join('\n')
+assert.ok(grantFirst.indexOf(enrollGrant) < grantFirst.indexOf(
+  'revoke all on function public.enroll_study_path(uuid, integer) from authenticated;'))
+const aclMutations: [string, string][] = [
+  ['ACL A: grant before revoke', grantFirst],
+  ['ACL B: final authenticated revoke', `${liveEnrollmentSql}\n${enrollRevoke}`],
+  ...['anon', 'service_role', 'PUBLIC'].map((role): [string, string] => [
+    `ACL C/D/E: later ${role} grant`,
+    `${liveEnrollmentSql}\ngrant execute on function public.enroll_study_path(uuid, integer) to ${role};`,
+  ]),
+  ['ACL F: lifecycle grant', `${liveEnrollmentSql}\ngrant execute on function public.study_path_enrollments_enforce_lifecycle() to authenticated;`],
+  ['ACL G: comment-only correct block', slice41Statements.map((statement) => /^(?:grant|revoke)\b/.test(statement)
+    ? `/* ${statement} */` : statement).join('\n')],
+]
+for (const [name, sql] of aclMutations) {
+  assert.notEqual(sql, liveEnrollmentSql)
+  assert.throws(() => validateSlice41Migration(sql), name)
+}
+for (const { name, signature } of enrollmentRpcs) {
+  assert.throws(() => validateSlice41Migration(`${liveEnrollmentSql}\nrevoke execute on function public.${name}(${signature}) from authenticated;`),
+    `Final authenticated revoke: ${name}`)
+}
+// Prove actual ordered evaluation: a later grant restores a previous revoke.
+assert.doesNotThrow(() => validateSlice41Migration(`${liveEnrollmentSql}\n${enrollRevoke}\n${enrollGrant}`))
+const fakeAcl = quotedSqlData(enrollGrant)
+assert.doesNotThrow(() => validateSlice41Migration(`${liveEnrollmentSql}\nselect ${fakeAcl};`), 'ACL H: quoted text ignored')
+assert.throws(() => validateSlice41Migration(`${liveEnrollmentSql}\n${enrollRevoke}\nselect ${fakeAcl};`),
+  'ACL H: quoted grant cannot repair real revoke')
+assert.throws(() => validateSlice41Migration(`${liveEnrollmentSql}\ngrant execute on all functions in schema public to anon;`),
+  'Unsupported blanket function grant must fail closed')
+assert.throws(() => validateSlice41Migration(liveEnrollmentSql.replace(enrollGrant,
+  enrollGrant.replace('(uuid, integer)', '(uuid)'))), 'Wrong function signature')
+
+for (const prefix of ['', '\uFEFF']) {
+  for (const newline of ['\n', '\r\n']) {
+    assert.throws(() => validateSlice41Migration(`${prefix}-- pg-delta: transaction=false${newline}${liveEnrollmentSql}`),
+      'Active runner metadata must fail')
+  }
+}
+assert.doesNotThrow(() => validateSlice41Migration(`${liveEnrollmentSql}\n-- pg-delta: transaction=false\n`),
+  'Later ordinary comment is not active metadata')
+assert.doesNotThrow(() => validateSlice41Migration(`-- Documentation mentions -- pg-delta: transaction=false\n${liveEnrollmentSql}`))
+// Cheap formatting support without claiming arbitrary PostgreSQL syntax.
+assert.doesNotThrow(() => validateSlice41Migration(liveEnrollmentSql.replace(
+  'create or replace function public.enroll_study_path(',
+  'create/* declaration comment */ or replace function public.enroll_study_path(')))
+console.log('Slice 4.1: comment, body-literal, ordered ACL, metadata, and lexical regression checks passed')
+
 
 const supabaseTypesSource = readFileSync(
   new URL('../src/lib/supabase.ts', import.meta.url),

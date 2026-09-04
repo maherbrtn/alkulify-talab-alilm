@@ -21,6 +21,19 @@
 - RLS التسجيل يسمح لـ`authenticated` بقراءة صفوفه فقط، مع سحب الكتابة المباشرة. تمر mutations عبر RPCs `SECURITY DEFINER` تشتق المالك من `auth.uid()` وتنفذ enroll/pause/resume/withdraw/upgrade فقط؛ يقرأ `service_role` الجدول ولا ينفذ RPCs المتصفح.
 - أثبت تحقق Slice 4 المستضاف أن المالك `postgres`، وأن RLS يطبق policy المالك الوحيدة، وأن `anon` بلا وصول و`authenticated` يقرأ صفه فقط ولا يكتب مباشرة و`service_role` يقرأ فقط. الدوال الخمس `SECURITY DEFINER` و`search_path = ''` بلا overloads غير متوقعة، وتنفيذها لـ`authenticated` فقط. نجحت حالات lifecycle والـidempotency والترقية والretirement وعزل المالك وتعدد `active`، ثم رُجعت البيانات الصناعية وبقي الجدولان فارغين. ثبت تركيب advisory locks و`FOR SHARE` ساكنًا ومستضافًا، ولم ينفذ parallel stress test.
 
+## Slice 4.1 — HOSTED APPLIED AND VERIFIED
+
+طبقت migration `20260904195919_study_path_enrollments_one_live_forward_only.sql` مستضافًا وتحققت على PostgreSQL `17.6` بتاريخ `2026-09-04`.
+
+- يوجد قيد B-tree exclusion واحد لكل `(user_id, path_id)` حيث الحالة `active` أو `paused`، من النوع `DEFERRABLE INITIALLY DEFERRED`: يسمح بالتعايش المؤقت للمصدر والهدف داخل الترقية الذرية target-first، لكنه يمنع التزام أكثر من نسخة live للمسار نفسه. ينشئ القيد فهرسه تلقائيًا بلا extension أو فهرس زائد.
+- تبقى المسارات المختلفة live بالتوازي بلا primary/focused path. تبقى unique الإصدار الدقيق immediate وهدف `ON CONFLICT` الصريح.
+- enroll للإصدار نفسه active/paused idempotent بلا resume ضمني؛ يرفض إصدارًا مختلفًا عند وجود live للمسار نفسه ويوجه إلى upgrade.
+- upgrade يشترط هدفًا أكبر من المصدر قبل فرع الإعادة الناجحة أيضًا. تبقى الترقية target-first والرابط الدقيق وpublication/retirement والأقفال والأدوار كما هي.
+- يتحقق lifecycle من supersession عند INSERT أو عند إنشائه بـUPDATE: هدف active لنفس المالك والمسار وبنسخة أكبر وغير المصدر. لا يلزم بقاء الهدف التاريخي active لاحقًا.
+- بعد withdrawal، إذا لم يبق live، يجوز enroll لإصدار آخر مؤهل وفق دلالات terminal للإصدار الدقيق؛ لا lifetime monotonicity.
+- تفحص migration التعارضات تحت `ACCESS EXCLUSIVE` داخل transaction يديرها Supabase migration runner دون `BEGIN/COMMIT` صريحين في الملف؛ تحقق rollback الذري للـrunner بprobe فاشل بلا object أو history row باقٍ، وتفشل دون إصلاح التاريخ عند وجود عدة live أو رابط supersession غير صالح. لا ترفض هدفًا تاريخيًا لمجرد تغير حالته.
+- تحقق مستضافًا القيد المؤجل و`ON CONFLICT` ومصفوفات RPC/lifecycle وRLS/ACL والتنظيف النهائي. لم ينفذ اختبار ضغط متزامن حقيقي مضبوط بجلسَتين.
+
 ## غير منفذ بعد
 
 - لا يوجد حاليًا تعريف علمي منشور في الكتالوج، ولذلك لا يولد البناء صفحة مسار تفصيلية فعلية رغم جاهزية قوالب current/history.
@@ -38,4 +51,4 @@
 
 ## الترتيب المقترح
 
-أغلقت Slice 4 محليًا ومستضافًا. Slice 5 للواجهة هي الخطوة المخططة التالية ولم تبدأ، وأدوات التحرير والتوصيات ليستا ضمن V1 الحالي.
+أغلقت Slice 4 وSlice 4.1 محليًا ومستضافًا؛ بقي اختبار ضغط متزامن حقيقي مضبوط غير منفذ، ولم تبدأ Slice 5 للواجهة، وأدوات التحرير والتوصيات ليستا ضمن V1 الحالي.

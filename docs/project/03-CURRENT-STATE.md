@@ -1,6 +1,19 @@
 # الحالة الحالية
 
-آخر تحقق وظيفي: 2026-09-03 على `develop` عند baseline `d0b9b99` مع تغييرات Slice 4 غير الملتزمة بعد اكتمال تحققها المستضاف.
+آخر تحقق محلي: `2026-09-04` على `develop` عند baseline `12a6902` مع تغييرات Slice 4.1 غير الملتزمة؛ نجحت selfchecks وTypeScript وbuild و`slice:verify`. طبقت Slice 4.1 مستضافًا وتحققت على PostgreSQL `17.6` في `2026-09-04`، مع بقاء اختبار ضغط متزامن حقيقي مضبوط بجلسَتين غير منفذ.
+
+## Slice 4.1 — HOSTED APPLIED AND VERIFIED
+
+طبقت migration `20260904195919_study_path_enrollments_one_live_forward_only.sql` على المشروع المستضاف `flrqmxxvdlwjutevefax` وتحقق سلوكها على PostgreSQL `17.6` بتاريخ `2026-09-04`.
+
+- يوجد قيد B-tree exclusion واحد لكل `(user_id, path_id)` حيث الحالة `active` أو `paused`، من النوع `DEFERRABLE INITIALLY DEFERRED`: يسمح بالتعايش المؤقت للمصدر والهدف داخل الترقية الذرية target-first، لكنه يمنع التزام أكثر من نسخة live للمسار نفسه. ينشئ القيد فهرسه تلقائيًا بلا extension أو فهرس زائد.
+- تبقى المسارات المختلفة live بالتوازي بلا primary/focused path. تبقى unique الإصدار الدقيق immediate وهدف `ON CONFLICT` الصريح.
+- enroll للإصدار نفسه active/paused idempotent بلا resume ضمني؛ يرفض إصدارًا مختلفًا عند وجود live للمسار نفسه ويوجه إلى upgrade.
+- upgrade يشترط هدفًا أكبر من المصدر قبل فرع الإعادة الناجحة أيضًا. تبقى الترقية target-first والرابط الدقيق وpublication/retirement والأقفال والأدوار كما هي.
+- يتحقق lifecycle من supersession عند INSERT أو عند إنشائه بـUPDATE: هدف active لنفس المالك والمسار وبنسخة أكبر وغير المصدر. لا يلزم بقاء الهدف التاريخي active لاحقًا.
+- بعد withdrawal، إذا لم يبق live، يجوز enroll لإصدار آخر مؤهل وفق دلالات terminal للإصدار الدقيق؛ لا lifetime monotonicity.
+- تفحص migration التعارضات تحت `ACCESS EXCLUSIVE` داخل transaction يديرها Supabase migration runner دون `BEGIN/COMMIT` صريحين في الملف؛ أثبت probe فاشل rollback ذريًا بلا object أو history row باقٍ، وتفشل migration دون إصلاح التاريخ عند وجود عدة live أو رابط supersession غير صالح. لا ترفض هدفًا تاريخيًا لمجرد تغير حالته.
+- تحقق مستضافًا القيد المؤجل و`ON CONFLICT` ومصفوفات RPC/lifecycle وRLS/ACL والأقفال والتنظيف النهائي. لم ينفذ اختبار ضغط متزامن حقيقي مضبوط بجلسَتين.
 
 ## يعمل الآن
 
@@ -16,7 +29,7 @@
 - اكتملت Study Paths Slice 3V محليًا ومستضافًا: registry بالحقول الخمسة الدنيا وPK على `(path_id, version)`، وRLS مفعل بلا policies، ولا privileges لـ`anon` أو `authenticated`، و`service_role` يملك `SELECT` فقط. ثبتت القيود وimmutability وretirement أحادي الاتجاه ورفض الحذف باختبارات transaction مستضافة، وبقي registry فارغًا بلا بيانات صناعية.
 - اكتملت Study Paths Slice 4 محليًا ومستضافًا بالمigration `20260903164705`: تسجيل الطالب مثبت على إصدار وبحالات `active | paused | withdrawn | superseded`، وRLS قراءة للمالك فقط، وبلا كتابة مباشرة للمتصفح. ثبتت فعليًا RPCs الـenroll/pause/resume/withdraw/upgrade، وعزل المالك والأدوار، والانتقالات والـidempotency والretirement وتعدد المسارات النشطة، مع rollback لكل البيانات الصناعية.
 - تحقق Supabase المستضاف مكتمل: Auth وprofile trigger وعزل RLS بين مستخدمين وRPC والقيود ومزامنة Player اختبرت فعليًا.
-- تاريخ migrations المحلي والبعيد متطابق للإصدارات `20260824000000`، `20260826000000`، `20260829000000`، `20260902000000`، و`20260903164705`؛ و`authenticated` يملك على `profiles` فقط `SELECT/INSERT/UPDATE`.
+- تاريخ migrations المحلي والبعيد متطابق للإصدارات `20260824000000`، `20260826000000`، `20260829000000`، `20260902000000`، `20260903164705`، و`20260904195919`؛ و`authenticated` يملك على `profiles` فقط `SELECT/INSERT/UPDATE`.
 - مزامنة upstream حتى `5dbed6d`.
 
 ## جزئي أو غير موجود
@@ -28,7 +41,7 @@
 
 ## الخطوة التالية
 
-Slice 4 مغلقة محليًا ومستضافًا. Slice 5 هي الخطوة المخططة التالية، لكنها لم تبدأ ضمن هذا العمل.
+إغلاق تغييرات Slice 4.1 المطبقة والمتحققة محليًا ومستضافًا، مع إبقاء اختبار الضغط المتزامن الحقيقي المضبوط قيدًا معروفًا. Slice 4 تبقى مغلقة وفق عقدها السابق؛ Slice 5 لم تبدأ.
 
 ## عوائق ومخاطر نشطة
 

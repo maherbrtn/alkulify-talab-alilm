@@ -62,7 +62,7 @@
 
 ## D-016 — تسجيل مثبت وترقية صريحة مع تعدد active
 
-القرار: يثبت enrollment على إصدار محدد، ولا يتبع latest تلقائيًا؛ الترقية عملية صريحة تنشئ/تعتمد تسجيل الإصدار الجديد وتجعل القديم `superseded`. حالات V1 هي `active | paused | withdrawn | superseded`، ويجوز للمستخدم امتلاك عدة تسجيلات `active` بالتوازي بلا focused/primary path عالمي. السبب: حفظ عقد المنهج للطالب ودعم دراسة عدة مسارات من دون افتراض UX غير مثبت. النتيجة: لكل مسار نشط Continue مستقل، ولا يوجد partial unique index يقيد التسجيلات النشطة.
+القرار: يثبت enrollment على إصدار محدد، ولا يتبع latest تلقائيًا؛ الترقية عملية صريحة تنشئ/تعتمد تسجيل الإصدار الجديد وتجعل القديم `superseded`. حالات V1 هي `active | paused | withdrawn | superseded`، ويجوز للمستخدم امتلاك عدة تسجيلات `active` بالتوازي بلا focused/primary path عالمي. السبب: حفظ عقد المنهج للطالب ودعم دراسة عدة مسارات من دون افتراض UX غير مثبت. النتيجة: لكل مسار نشط Continue مستقل، ولا يوجد قيد عالمي يقيد عدد المسارات المختلفة live؛ يضيف D-019 قيد النسخة live الواحدة للمسار نفسه.
 
 ## D-017 — تقدم المسار مشتق من lesson_progress
 
@@ -73,3 +73,11 @@
 القرار: يقرأ المستخدم تسجيلاته تحت RLS، وتمر كل mutation عبر RPC تشتق المالك من `auth.uid()`. يبقى `withdrawn` و`superseded` terminal، ولا يفتح enroll المكرر صفًا terminal؛ يعيد resume الحالة `active` مع الاحتفاظ بـ`paused_at` كآخر pause. upgrade ذرية تنشئ أو تعيد استخدام هدفًا غير terminal من المسار نفسه، ثم تربط القديم به وتجعله `superseded`؛ لا تنسخ progress. السبب: حفظ تاريخ وعقد الإصدار مع idempotency محددة وتزامن آمن بلا عمليات حذف أو تحديث مباشرة. النتيجة: retirement يمنع enroll أو upgrade إلى إصدار جديد ولا يغير التسجيل القائم، ويجوز للمستخدم امتلاك عدة مسارات `active` بلا focused/primary path.
 
 تحقق Slice 4 المستضاف أثبت هذا العقد بأدوار فعلية واختبارات rollback، مع DB trigger يضمن أن رابط supersession لنفس المالك والمسار وإلى هدف active. terminal يعني منع أي انتقال أو mutation مادية؛ لا يفترض العقد أن كل SQL UPDATE اسمي مطابق للقيم الحالية يجب أن يرفع خطأ.
+
+## D-019 — نسخة live واحدة للمسار وترقية للأمام فقط
+
+القرار المعتمد والمنفذ محليًا ومستضافًا في Slice 4.1: لكل `(user_id, path_id)` نسخة ملتزمة واحدة على الأكثر في `active | paused`؛ تبقى المسارات المختلفة مستقلة. يفرض قيد partial B-tree exclusion مؤجل إلى COMMIT ذلك بلا extension، ويحفظ ترتيب target-first الذري للترقية وunique الإصدار الدقيق immediate. يرفض upgrade الهدف الأصغر أو المساوي قبل أي إعادة ناجحة، ويثبت lifecycle الاتجاه نفسه عند INSERT/UPDATE المنشئ لرابط supersession. يجب أن يكون الهدف active وقت إنشاء الرابط، وليس إلى الأبد.
+
+يبقى enroll للإصدار نفسه active/paused idempotent بلا resume ضمني؛ يرفض نسخة أخرى أثناء وجود live. بعد withdrawal وعدم وجود live تبقى إمكانية enroll لإصدار آخر مؤهل كما كانت، مع بقاء terminal exact-version غير قابل للإحياء؛ لا نفرض lifetime monotonicity. تدقق migration البيانات تحت قفل الجدول وتفشل دون إصلاح صامت للتاريخ.
+
+الحالة: **HOSTED APPLIED AND VERIFIED** في `20260904195919_study_path_enrollments_one_live_forward_only.sql` على PostgreSQL `17.6`. تحقق القيد المؤجل وذرية runner و`ON CONFLICT` ومصفوفات RPC/lifecycle وRLS/ACL؛ لم ينفذ اختبار ضغط متزامن حقيقي مضبوط بجلسَتين. لا تغيير في الأدوار أو signatures أو أنواع TypeScript أو تقدم الدرس أو Slice 5.

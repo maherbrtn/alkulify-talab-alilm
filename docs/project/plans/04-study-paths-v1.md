@@ -1,8 +1,8 @@
 # خطة: 04 — مسارات الدراسة V1
 
-- الحالة: `نشطة — Slice 4 مكتملة محليًا ومستضافًا؛ Slice 5 لم تبدأ`
+- الحالة: `نشطة — Slice 4.1 مطبقة ومتحققة مستضافًا؛ اختبار ضغط متزامن حقيقي مضبوط لم ينفذ؛ Slice 5 لم تبدأ`
 - المالك: `Codex / صاحب المشروع`
-- آخر تحديث: `2026-09-03`
+- آخر تحديث: `2026-09-04`
 - ملف الوحدة: `docs/project/06-STUDY-PATHS.md`
 
 ## الهدف ومعيار الاكتمال
@@ -134,7 +134,7 @@ type StudyPathLesson = {
 - FK `(path_id, path_version)` إلى `study_path_versions`
 - unique `(user_id, path_id, path_version)`
 
-لا يوجد partial unique index على التسجيلات النشطة. يجوز للمستخدم امتلاك عدة مسارات `active` بالتوازي. عمليات mutation تكون RPC-only وتشتق المالك من `auth.uid()`، ولا تقبل `p_user_id` ولا تغير إصدار تسجيل قائم.
+يفرض Slice 4.1 المطبق محليًا ومستضافًا partial B-tree exclusion مؤجلًا للنسخة live الواحدة لكل مستخدم/مسار (`active | paused`). يجوز للمستخدم امتلاك عدة مسارات مختلفة `active` بالتوازي. عمليات mutation تكون RPC-only وتشتق المالك من `auth.uid()`، ولا تقبل `p_user_id` ولا تغير إصدار تسجيل قائم.
 
 ## سياسة الإصدارات الدقيقة
 
@@ -229,6 +229,31 @@ type StudyPathLesson = {
 
 بوابة Slice 4V: طبقت migration باسم التاريخ البعيد الفعلي `20260903164705_study_path_enrollments.sql`. المالك ومالكو RPCs/trigger function هم `postgres`؛ الدوال الخمس `SECURITY DEFINER` و`search_path = ''` وتنفيذها لـ`authenticated` فقط بلا overloads زائدة، وtrigger function `SECURITY INVOKER` غير قابلة للتنفيذ المباشر من أدوار المتصفح/service. أثبتت اختبارات rollback حالات enroll/pause/resume/withdraw/upgrade والـidempotency والterminal/retirement وعزل المالك وتعدد active وسلامة supersession وثبات الإصدار وmonotonicity. ثبتت ACL/RLS الفعلية، وبقي `study_path_versions` و`study_path_enrollments` بصفر صفوف.
 
+## Slice 4.1 — HOSTED APPLIED AND VERIFIED
+
+طبقت migration `20260904195919_study_path_enrollments_one_live_forward_only.sql` مستضافًا وتحققت على PostgreSQL `17.6` بتاريخ `2026-09-04`.
+
+- يوجد قيد B-tree exclusion واحد لكل `(user_id, path_id)` حيث الحالة `active` أو `paused`، من النوع `DEFERRABLE INITIALLY DEFERRED`: يسمح بالتعايش المؤقت للمصدر والهدف داخل الترقية الذرية target-first، لكنه يمنع التزام أكثر من نسخة live للمسار نفسه. ينشئ القيد فهرسه تلقائيًا بلا extension أو فهرس زائد.
+- تبقى المسارات المختلفة live بالتوازي بلا primary/focused path. تبقى unique الإصدار الدقيق immediate وهدف `ON CONFLICT` الصريح.
+- enroll للإصدار نفسه active/paused idempotent بلا resume ضمني؛ يرفض إصدارًا مختلفًا عند وجود live للمسار نفسه ويوجه إلى upgrade.
+- upgrade يشترط هدفًا أكبر من المصدر قبل فرع الإعادة الناجحة أيضًا. تبقى الترقية target-first والرابط الدقيق وpublication/retirement والأقفال والأدوار كما هي.
+- يتحقق lifecycle من supersession عند INSERT أو عند إنشائه بـUPDATE: هدف active لنفس المالك والمسار وبنسخة أكبر وغير المصدر. لا يلزم بقاء الهدف التاريخي active لاحقًا.
+- بعد withdrawal، إذا لم يبق live، يجوز enroll لإصدار آخر مؤهل وفق دلالات terminal للإصدار الدقيق؛ لا lifetime monotonicity.
+- تفحص migration التعارضات تحت `ACCESS EXCLUSIVE` داخل transaction يديرها Supabase migration runner دون `BEGIN/COMMIT` صريحين في الملف؛ تحقق rollback ذري بprobe فاشل بلا object أو history row باقٍ، وتفشل دون إصلاح التاريخ عند وجود عدة live أو رابط supersession غير صالح. لا ترفض هدفًا تاريخيًا لمجرد تغير حالته.
+- تحقق مستضافًا القيد المؤجل و`ON CONFLICT` ومصفوفات RPC/lifecycle وRLS/ACL والتنظيف النهائي. لم ينفذ اختبار ضغط متزامن حقيقي مضبوط بجلسَتين.
+
+### إثبات Slice 4.1
+
+- [x] baseline نظيف `develop` عند `12a6902`؛ migration Slice 4 الأصلية محفوظة byte-for-byte.
+- [x] migration جديدة مولدة عبر CLI المحلي؛ قيد واحد وأقفال/preconditions واستبدال enroll/upgrade/lifecycle فقط.
+- [x] selfchecks تقرأ أحدث تعريف فعال حسب ترتيب migrations، وتثبت hash الأصل وACL والترتيب والاتجاه وINSERT.
+- [x] نجحت بوابات `pnpm check` وTypeScript وbuild و`slice:verify` و`git diff --check` محليًا بتاريخ `2026-09-04`؛ لا تثبت هذه البوابات SQL runtime أو COMMIT المتزامن.
+- [x] تحقق PostgreSQL `17.6` المستضاف: syntax، deferral، تعارض active/paused، استقلال المسارات والمستخدمين، target-first، وexact `ON CONFLICT`.
+- [x] تحقق رفض الحالة live المزدوجة عند إنهاء القيد المؤجل، ونجاح الحالة العابرة التي تنتهي بـsource superseded.
+- [x] تحقق التطبيق المستضاف والأدوار والـidempotency والretirement وforward upgrade وpreconditions وذرية runner، وسجل في handoff جديد.
+
+بقي اختبار ضغط متزامن حقيقي مضبوط بجلسَتين غير منفذ؛ لا يدعي التحقق المستضاف إثباته.
+
 ### Slice 5 — واجهة التسجيل والمسار الخاص
 
 - [ ] enroll controls للتعريفات المنشورة وصفحة enrollment مملوكة.
@@ -298,7 +323,7 @@ type StudyPathLesson = {
 - [ ] التسجيل مثبت على إصدار ولا يتبع latest تلقائيًا.
 - [ ] الترقية صريحة وتحول القديم إلى `superseded` وتحفظ الاستفادة من تقدم المفاتيح المشتركة.
 - [ ] يمكن للمستخدم امتلاك مسارين أو أكثر في حالة `active` بالتوازي.
-- [ ] لا يوجد global focused/primary path ولا unique constraint على active enrollments.
+- [ ] لا يوجد global focused/primary path؛ نسخة live ملتزمة واحدة لكل مستخدم/مسار مع السماح بمسارات مختلفة بالتوازي.
 - [ ] owner وحده يقرأ التسجيل، وanon/other-user/direct table mutation مرفوضة.
 - [ ] `lesson_progress.completed` وحده يحدد اكتمال الدرس؛ لا جدول completion ثانٍ.
 - [ ] الوحدة والمسار والنسبة مشتقة بالقواعد الموثقة، ويحتسب التقدم السابق للتسجيل والدرس المشترك بلا نسخ بيانات.
