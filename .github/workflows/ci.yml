@@ -1,19 +1,60 @@
 name: ci
-on: [push, pull_request]
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
-    env: { PUBLIC_MEILI_HOST: 'https://search.assoli.site' }
+    env:
+      PUBLIC_MEILI_HOST: https://search.assoli.site
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v6
         with:
-          path: node_modules/.astro
-          key: astro-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
-          restore-keys: astro-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - run: pnpm exec tsc --noEmit
       - run: pnpm build
+      - name: Check committed patch whitespace
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            # Three-dot compares the PR head with its merge base, not the
+            # synthetic merge commit checked out for the build gates.
+            git diff --check "$PR_BASE...$PR_HEAD"
+          else
+            if [[ -n "$PUSH_BEFORE" && ! "$PUSH_BEFORE" =~ ^0+$ ]] &&
+               git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+              base=$PUSH_BEFORE
+            else
+              # New branch, missing before, or unavailable old force-push tip:
+              # check the entire current tree against Git's empty tree.
+              base=$(git hash-object -t tree /dev/null)
+            fi
+            git diff --check "$base" "$PUSH_HEAD"
+          fi
+      - run: git diff --check

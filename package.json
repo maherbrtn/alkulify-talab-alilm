@@ -22,7 +22,10 @@
     "check": "tsx scripts/selfcheck.ts",
     "verify:study-path-publications": "tsx --env-file-if-exists=.env.local scripts/verify-study-path-publications.ts",
     "verify": "tsx --env-file-if-exists=.env scripts/verify-batch.ts",
-    "eval": "tsx --env-file-if-exists=.env scripts/eval.ts"
+    "eval": "tsx --env-file-if-exists=.env scripts/eval.ts",
+    "project:status": "bash scripts/project-status.sh",
+    "slice:verify": "bash scripts/slice-verify.sh",
+    "slice:report": "bash scripts/slice-report.sh"
   },
   "dependencies": {
     "@astrojs/react": "^6.0.4",
