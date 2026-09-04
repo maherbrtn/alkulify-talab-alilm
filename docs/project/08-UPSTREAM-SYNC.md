@@ -3,10 +3,14 @@
 ## العلاقة
 
 - `origin`: `https://github.com/maherbrtn/alkulify-talab-alilm.git`
-- `upstream`: `https://github.com/haithamassoli/kashaf-abu-jaafar.git`
+- `upstream`: `https://github.com/haithamassoli/kashaf-alkulify.git`
 - خط العمل: `develop`؛ مرجع هيثم: `upstream/main`.
 
-في 2026-08-28 كان `develop`/`origin/develop` عند `16a8a6d` و`upstream/main` المحلي عند `5dbed6d`. آخر merge يصرح بالمزامنة حتى هذا commit، ولا يوجد في المرجع المحلي commit من upstream خارج develop. تظهر فروع تكامل مؤرخة في التاريخ (`integrate/haitham-*`).
+المستودع السابق `https://github.com/haithamassoli/kashaf-abu-jaafar.git` يعيد التوجيه إلى العنوان canonical أعلاه.
+
+في `2026-09-04` اكتملت مزامنة upstream من baseline السابق `5dbed6d` حتى `d3ee5dc`. دمج فرع التكامل `integrate/haitham-2026-09-04` الـcommitين `581ff8842fa26c18606a816121ba4f5f392f97c0` و`d3ee5dcbc25c455f38c92bfb084a3cdb9ef02775` بلا تعارضات، ثم دخل الناتج إلى `develop` بالـcommit `c26d118 merge: sync upstream view transitions`. شمل التكامل 13 ملفًا من upstream فقط.
+
+نجحت بوابات `pnpm install --frozen-lockfile` و`pnpm check` و`pnpm exec tsc --noEmit` و`pnpm build` و`pnpm slice:verify`؛ بنى Astro عدد `8260` صفحة، ونجح GitHub Actions run `33917124878`.
 
 ## الإجراء
 
@@ -14,10 +18,8 @@
 2. نفذ `git fetch upstream` قبل المقارنة.
 3. أنشئ فرع تكامل مؤرخًا من `develop`.
 4. ادمج `upstream/main` merge صريحًا، بلا rebase لتاريخ منشور.
-5. راجع التعارضات ثم شغل `pnpm check` و`pnpm build`.
-6. ادمج فرع التكامل إلى `develop` بعد المراجعة.
-
-لم يُنفذ fetch أو merge أو push أثناء إنشاء هذه الوثائق.
+5. راجع نتيجة الدمج وكل تعارض، ثم شغل بوابات التحقق المناسبة ومنها `pnpm check` و`pnpm build`.
+6. ادمج فرع التكامل إلى `develop` بعد نجاح المراجعة والتحقق.
 
 ## مناطق حساسة
 
