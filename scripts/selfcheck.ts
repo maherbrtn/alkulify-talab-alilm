@@ -2304,4 +2304,391 @@ for (const rpc of [
   assert.match(supabaseTypesSource, new RegExp(`${rpc}: \\{`))
 }
 
+// Slice 5A: pure owner/path boundaries and real client serialization over an in-memory transport.
+const {
+  partitionStudyPathEnrollments, selectStudyPathEnrollment, studyPathEnrollmentActions,
+  resolveStudentStudyPathVersions, freshStudyPathEnrollmentEligibility,
+  studyPathUpgradeEligibility, studyPathUpgradePreview, studyPathContinueLink,
+  deriveStudentStudyPath,
+} = await import('../src/lib/student-study-path.ts')
+const { createStudentStudyPathCloud, StudentStudyPathCloudError } =
+  await import('../src/lib/student-study-path-cloud.ts')
+const { createClient: createStudyPathTestClient } = await import('@supabase/supabase-js')
+type Enrollment5A = import('../src/lib/supabase.ts').StudyPathEnrollmentRow
+type Database5A = import('../src/lib/supabase.ts').Database
+
+// All curriculum is constructed here, with no production catalog or fixture mutation.
+const uuid5A = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+const pathId5A = uuid5A(1)
+const lessonKeys5A = [uuid5A(10), uuid5A(11), uuid5A(12)]
+const version5A = (number: number, keys: string[]): StudyPathVersion => ({
+  pathId: pathId5A, version: number, publishedAt: '2026-09-01T00:00:00.000Z',
+  modules: [{ moduleKey: uuid5A(2), title: 'Module', objective: 'Objective', position: 1,
+    lessons: keys.map((lessonKey, index) => ({ lessonKey, position: index + 1 })) }],
+})
+const source5A = version5A(1, lessonKeys5A.slice(0, 2))
+const target5A = version5A(2, lessonKeys5A.slice(1))
+const path5A: import('../src/lib/study-paths.ts').StudyPathDefinition = {
+  pathId: pathId5A, slug: 'test-only', title: 'Test', description: 'In-memory only',
+  status: 'published', currentVersion: 2, versions: [source5A, target5A],
+}
+const enrollment5A = (overrides: Partial<Enrollment5A> = {}): Enrollment5A => ({
+  id: uuid5A(3), user_id: uuid5A(4), path_id: pathId5A, path_version: 1, state: 'active',
+  enrolled_at: '2026-09-02T00:00:00.000Z', updated_at: '2026-09-02T00:00:00.000Z',
+  paused_at: null, withdrawn_at: null, superseded_at: null,
+  superseded_by_enrollment_id: null, ...overrides,
+})
+const active5A = enrollment5A()
+const otherPath5A = enrollment5A({ id: uuid5A(5), path_id: uuid5A(6) })
+const history5A = enrollment5A({ id: uuid5A(7), path_version: 2, state: 'withdrawn' })
+assert.equal(partitionStudyPathEnrollments([active5A, otherPath5A], pathId5A).live, active5A)
+assert.equal(partitionStudyPathEnrollments([active5A, otherPath5A], otherPath5A.path_id).live, otherPath5A)
+assert.deepEqual(partitionStudyPathEnrollments([history5A], pathId5A), { live: null, historical: [history5A] })
+assert.equal(selectStudyPathEnrollment([active5A, history5A], pathId5A, history5A.id), history5A)
+assert.equal(selectStudyPathEnrollment([active5A, otherPath5A], pathId5A, otherPath5A.id), null)
+assert.equal(selectStudyPathEnrollment([active5A], pathId5A, uuid5A(999)), null)
+assert.equal(selectStudyPathEnrollment([active5A], pathId5A), active5A)
+assert.throws(() => partitionStudyPathEnrollments([active5A, enrollment5A({ id: uuid5A(8), path_version: 2, state: 'paused' })], pathId5A), /multiple live/)
+assert.throws(() => partitionStudyPathEnrollments([active5A, active5A], pathId5A), /duplicate/)
+assert.throws(() => partitionStudyPathEnrollments([active5A, enrollment5A({ user_id: uuid5A(88) })], pathId5A), /mixed/)
+assert.deepEqual(studyPathEnrollmentActions('active'), { pause: true, resume: false, withdraw: true, upgrade: true })
+assert.deepEqual(studyPathEnrollmentActions('paused'), { pause: false, resume: true, withdraw: true, upgrade: true })
+for (const state of ['withdrawn', 'superseded'] as const)
+  assert.deepEqual(studyPathEnrollmentActions(state), { pause: false, resume: false, withdraw: false, upgrade: false })
+const versions5A = resolveStudentStudyPathVersions(path5A, active5A)
+assert.equal(versions5A.pinned?.version, 1)
+assert.equal(versions5A.current.version, 2)
+assert.equal(versions5A.newer?.version, 2)
+assert.throws(() => resolveStudentStudyPathVersions({ ...path5A, versions: [target5A] }, active5A), /unavailable/)
+assert.throws(() => resolveStudentStudyPathVersions(path5A, otherPath5A), /another path/)
+assert.deepEqual(freshStudyPathEnrollmentEligibility(path5A, [otherPath5A]), { allowed: true })
+assert.deepEqual(freshStudyPathEnrollmentEligibility(path5A, [active5A]), { allowed: false, reason: 'live-exists' })
+assert.deepEqual(freshStudyPathEnrollmentEligibility(path5A, [history5A]), { allowed: false, reason: 'terminal-version' })
+assert.deepEqual(freshStudyPathEnrollmentEligibility(path5A, [enrollment5A({ state: 'withdrawn' })]), { allowed: true })
+// No lifetime monotonicity: untouched current v1 remains eligible after withdrawal from v2.
+assert.deepEqual(freshStudyPathEnrollmentEligibility({ ...path5A, currentVersion: 1 }, [history5A]), { allowed: true })
+for (const status of ['draft', 'retired'] as const)
+  assert.deepEqual(freshStudyPathEnrollmentEligibility({ ...path5A, status }, []), { allowed: false, reason: 'not-published' })
+assert.deepEqual(studyPathUpgradeEligibility(path5A, [active5A], active5A.id), { allowed: true })
+assert.deepEqual(studyPathUpgradeEligibility(path5A, [enrollment5A({ state: 'paused' })], active5A.id), { allowed: true })
+for (const target of [0, 1])
+  assert.deepEqual(studyPathUpgradeEligibility(path5A, [active5A], active5A.id, target), { allowed: false, reason: 'not-forward' })
+assert.deepEqual(studyPathUpgradeEligibility(path5A, [active5A], active5A.id, 3), { allowed: false, reason: 'not-current' })
+for (const state of ['withdrawn', 'superseded'] as const) {
+  assert.deepEqual(studyPathUpgradeEligibility(path5A, [active5A, { ...history5A, state }], active5A.id), { allowed: false, reason: 'terminal-version' })
+  assert.deepEqual(studyPathUpgradeEligibility(path5A, [enrollment5A({ state })], active5A.id), { allowed: false, reason: 'source-not-live' })
+}
+const canonicalBefore5A = JSON.stringify(path5A)
+const preview5A = studyPathUpgradePreview(source5A, target5A)
+assert.deepEqual(preview5A, {
+  sourceVersion: 1, targetVersion: 2, addedLessonKeys: [lessonKeys5A[2]],
+  removedLessonKeys: [lessonKeys5A[0]], sharedLessonKeys: [lessonKeys5A[1]], structureOrOrderChanged: true,
+})
+assert.equal(studyPathUpgradePreview(source5A, { ...source5A, version: 2 }).structureOrOrderChanged, false)
+assert.equal(studyPathUpgradePreview(source5A, version5A(2, [...lessonKeys5A.slice(0, 2)].reverse())).structureOrOrderChanged, true)
+
+assert.throws(() =>
+  studyPathUpgradePreview(
+    source5A,
+    version5A(2, [lessonKeys5A[0], lessonKeys5A[0]]),
+  ),
+)
+
+assert.equal(
+  studyPathUpgradePreview(source5A, {
+    ...source5A,
+    version: 2,
+    modules: source5A.modules.map((module) => ({
+      ...module,
+      moduleKey: uuid5A(222),
+    })),
+  }).structureOrOrderChanged,
+  true,
+)
+
+assert.throws(() => studyPathUpgradePreview(target5A, source5A), /forward/)
+const display5A = lessonKeys5A.map((lessonKey, i) => ({ lessonKey, title: `Lesson ${i}`, href: `/lessons/test-${i}/` }))
+const progress5A = (lesson_key: string, completed = false, position_seconds = 0): StudentProgressRow => ({
+  lesson_key, completed, position_seconds, duration_seconds: 100,
+  client_updated_at: '2026-08-01T00:00:00.000Z', // Before enrollment.
+})
+assert.equal(deriveStudentStudyPath(path5A, active5A, [], display5A).progress.percentage, 0)
+assert.equal(deriveStudentStudyPath(path5A, active5A, [], display5A).continueLesson?.lessonKey, lessonKeys5A[0])
+const resumed5A = deriveStudentStudyPath(path5A, active5A, [
+  { ...progress5A(lessonKeys5A[1], false, 60), client_updated_at: '2026-09-03T00:00:00.000Z' },
+  progress5A(lessonKeys5A[0], false, 12.9),
+], display5A)
+assert.equal(resumed5A.continueLesson?.href, '/lessons/test-0/?t=12')
+const previous5A = deriveStudentStudyPath(path5A, active5A, [progress5A(lessonKeys5A[0], true)], display5A)
+assert.equal(previous5A.progress.percentage, 50)
+assert.equal(previous5A.continueLesson?.lessonKey, lessonKeys5A[1])
+const shared5A = [progress5A(lessonKeys5A[1], true)]
+assert.equal(deriveStudentStudyPath(path5A, active5A, shared5A, display5A).progress.completedLessons, 1)
+assert.equal(deriveStudentStudyPath(path5A, enrollment5A({ path_version: 2 }), shared5A, display5A).progress.completedLessons, 1)
+const complete5A = deriveStudentStudyPath(path5A, active5A, lessonKeys5A.map((key) => progress5A(key, true)), display5A)
+assert.equal(deriveStudentStudyPath(path5A, active5A, [progress5A(lessonKeys5A[0], false, 100)], display5A).progress.completedLessons, 0)
+assert.equal(complete5A.completed, true)
+assert.equal(complete5A.progress.percentage, 100)
+assert.equal(complete5A.continueLesson, null)
+assert.equal(active5A.state, 'active')
+assert.equal(deriveStudentStudyPath(path5A, enrollment5A({ state: 'paused' }), [], display5A).continueLesson, null)
+assert.equal(JSON.stringify(path5A), canonicalBefore5A)
+assert.throws(() => deriveStudentStudyPath(path5A, active5A, [], []), /metadata unavailable/)
+assert.throws(() => deriveStudentStudyPath(path5A, active5A, [], [...display5A, display5A[0]]), /metadata unavailable/)
+const firstContinue5A = resumed5A.progress.continueLesson!
+for (const seconds of [0, -1, NaN, Infinity])
+  assert.equal(
+    studyPathContinueLink(
+      { ...firstContinue5A, effectiveResumeSeconds: seconds },
+      display5A,
+    )?.href,
+    '/lessons/test-0/',
+  )
+assert.equal(
+  studyPathContinueLink(
+    { ...firstContinue5A, effectiveResumeSeconds: 0.9 },
+    display5A,
+  )?.href,
+  '/lessons/test-0/?t=0',
+)
+assert.equal(
+  studyPathContinueLink(
+    { ...firstContinue5A, effectiveResumeSeconds: 1.9 },
+    display5A,
+  )?.href,
+  '/lessons/test-0/?t=1',
+)
+assert.throws(() => studyPathContinueLink(firstContinue5A, [{ ...display5A[0], href: '//outside.invalid/' }]), /invalid resolved/)
+assert.throws(() => deriveStudentStudyPath({ ...path5A, versions: [{ ...source5A,
+  modules: source5A.modules.map((module) => ({ ...module, lessons: module.lessons.map((lesson) => ({ ...lesson, title: 'Decoration' })) })),
+}, target5A] }, active5A, [], display5A), /unexpected field/)
+
+// Real supabase-js request serialization, but no network/auth/hosted project.
+const requests5A: { url: URL; method: string; body: unknown }[] = []
+let failKey5A: string | undefined
+let failRpc5A = false
+let nullRpc5A = false
+let networkRpc5A = false
+let corruptProgress5A = false
+let malformedProgressContainer5A: 'none' | 'first' | 'later' = 'none'
+let malformedProgressRow5A = false
+let malformedEnrollmentContainer5A = false
+let malformedEnrollmentRow5A = false
+let malformedRpcResult5A = false
+const cloudKeys5A = Array.from({ length: 205 }, (_, index) => uuid5A(1000 + index))
+const cloudRows5A = cloudKeys5A.filter((_, index) => index % 4 !== 0).map((key) => progress5A(key, true))
+const targetEnrollment5A = enrollment5A({ id: uuid5A(20), path_version: 2 })
+const testClient5A = createStudyPathTestClient<Database5A>('https://study-path-test.invalid', 'test-key', {
+  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  global: { fetch: async (input, init) => {
+    const url = new URL(String(input))
+    const method = init?.method ?? 'GET'
+    const body = init?.body ? JSON.parse(String(init.body)) : null
+    requests5A.push({ url, method, body })
+    const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
+      status, headers: { 'Content-Type': 'application/json' },
+    })
+    if (url.pathname.includes('/rpc/')) {
+      if (networkRpc5A) throw new TypeError('network unavailable')
+      if (malformedRpcResult5A) return reply({})
+      if (nullRpc5A) return reply(null)
+      if (failRpc5A) return reply({ code: '22023', message: 'private SQL detail', details: 'detail', hint: 'hint' }, 400)
+      return reply(url.pathname.endsWith('/upgrade_study_path_enrollment') ? targetEnrollment5A : active5A)
+    }
+    const params = url.searchParams
+    if (url.pathname.endsWith('/lesson_progress')) {
+      const keys = params.get('lesson_key')!.slice(4, -1).split(',')
+      const after = params.getAll('lesson_key')
+        .find((value) => value.startsWith('gt.'))?.slice(3)
+
+      if (malformedProgressContainer5A === 'first' && !after)
+        return reply({})
+      if (malformedProgressContainer5A === 'later' && after)
+        return reply({})
+      if (malformedProgressRow5A && !after)
+        return reply([{
+          lesson_key: keys[0],
+          position_seconds: 1,
+          duration_seconds: 100,
+          client_updated_at: '2026-08-01T00:00:00.000Z',
+        }])
+
+      if (failKey5A && keys.includes(failKey5A))
+        return reply({ code: 'XX000', message: 'batch failed' }, 500)
+      if (corruptProgress5A) return reply([progress5A(uuid5A(9999))])
+
+      return reply(cloudRows5A
+        .filter((row) =>
+          keys.includes(row.lesson_key) &&
+          (!after || row.lesson_key > after))
+        .slice(0, 7))
+    }
+    assert.ok(url.pathname.endsWith('/study_path_enrollments'))
+
+    if (malformedEnrollmentContainer5A) return reply({})
+    if (malformedEnrollmentRow5A) return reply([{
+      ...active5A,
+      state: 'invalid-state',
+    }])
+
+    const pathId = params.get('path_id')?.slice(3)
+    const exact = params.get('id')?.startsWith('eq.') ? params.get('id')!.slice(3) : undefined
+    const after = params.get('id')?.startsWith('gt.') ? params.get('id')!.slice(3) : undefined
+    return reply([active5A, history5A, otherPath5A]
+      .filter((row) => row.path_id === pathId && (!exact || row.id === exact) && (!after || row.id > after))
+      .sort((a, b) => a.id.localeCompare(b.id)).slice(0, 1))
+  } },
+})
+const service5A = createStudentStudyPathCloud(() => testClient5A)
+assert.deepEqual(await service5A.readProgress([]), [])
+assert.equal(requests5A.length, 0)
+assert.deepEqual(await service5A.readProgress([...cloudKeys5A, ...cloudKeys5A]), cloudRows5A)
+assert.ok(requests5A.length > 3)
+assert.equal(new Set(requests5A.map(({ url }) => url.searchParams.get('lesson_key'))).size, 3)
+for (const { url, method } of requests5A) {
+  assert.equal(method, 'GET')
+  assert.ok(url.searchParams.get('lesson_key')!.slice(4, -1).split(',').length <= 100)
+  assert.equal(url.searchParams.get('order'), 'lesson_key.asc')
+}
+failKey5A = cloudKeys5A[200]
+await assert.rejects(service5A.readProgress(cloudKeys5A), (error: unknown) =>
+  error instanceof StudentStudyPathCloudError && error.operation === 'read-progress')
+failKey5A = undefined
+corruptProgress5A = true
+await assert.rejects(service5A.readProgress(cloudKeys5A), StudentStudyPathCloudError)
+corruptProgress5A = false
+
+malformedProgressContainer5A = 'first'
+await assert.rejects(
+  service5A.readProgress([cloudKeys5A[1]]),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.operation === 'read-progress' &&
+    error.kind === 'response',
+)
+malformedProgressContainer5A = 'none'
+
+malformedProgressContainer5A = 'later'
+await assert.rejects(
+  service5A.readProgress(cloudKeys5A.slice(0, 20)),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.operation === 'read-progress' &&
+    error.kind === 'response',
+)
+malformedProgressContainer5A = 'none'
+
+malformedProgressRow5A = true
+await assert.rejects(
+  service5A.readProgress([cloudKeys5A[1]]),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.operation === 'read-progress' &&
+    error.kind === 'response',
+)
+malformedProgressRow5A = false
+
+await assert.rejects(service5A.readProgress(['invalid']), StudentStudyPathCloudError)
+assert.deepEqual(await service5A.readProgress([uuid5A(5000)]), [])
+assert.deepEqual(await service5A.readEnrollments(pathId5A), [active5A, history5A])
+assert.deepEqual(await service5A.readEnrollment(pathId5A, active5A.id), active5A)
+assert.equal(await service5A.readEnrollment(pathId5A, otherPath5A.id), null)
+
+malformedEnrollmentContainer5A = true
+await assert.rejects(
+  service5A.readEnrollments(pathId5A),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.kind === 'response',
+)
+malformedEnrollmentContainer5A = false
+
+malformedEnrollmentRow5A = true
+await assert.rejects(
+  service5A.readEnrollment(pathId5A, active5A.id),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.kind === 'response',
+)
+malformedEnrollmentRow5A = false
+
+requests5A.length = 0
+assert.deepEqual(await service5A.enroll(pathId5A, 1), active5A)
+await service5A.pause(active5A.id)
+await service5A.resume(active5A.id)
+await service5A.withdraw(active5A.id)
+assert.deepEqual(await service5A.upgrade(active5A.id, 2), targetEnrollment5A)
+assert.deepEqual(requests5A.map(({ url, body }) => [url.pathname.split('/').pop(), body]), [
+  ['enroll_study_path', { p_path_id: pathId5A, p_path_version: 1 }],
+  ['pause_study_path_enrollment', { p_enrollment_id: active5A.id }],
+  ['resume_study_path_enrollment', { p_enrollment_id: active5A.id }],
+  ['withdraw_study_path_enrollment', { p_enrollment_id: active5A.id }],
+  ['upgrade_study_path_enrollment', { p_enrollment_id: active5A.id, p_target_path_version: 2 }],
+])
+assert.ok(requests5A.every(({ method }) => method === 'POST'))
+
+malformedRpcResult5A = true
+await assert.rejects(
+  service5A.enroll(pathId5A, 1),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.kind === 'response' &&
+    error.operation === 'enroll_study_path',
+)
+await assert.rejects(
+  service5A.pause(active5A.id),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.kind === 'response' &&
+    error.operation === 'pause_study_path_enrollment',
+)
+await assert.rejects(
+  service5A.resume(active5A.id),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.kind === 'response' &&
+    error.operation === 'resume_study_path_enrollment',
+)
+await assert.rejects(
+  service5A.withdraw(active5A.id),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.kind === 'response' &&
+    error.operation === 'withdraw_study_path_enrollment',
+)
+await assert.rejects(
+  service5A.upgrade(active5A.id, 2),
+  (error: unknown) =>
+    error instanceof StudentStudyPathCloudError &&
+    error.kind === 'response' &&
+    error.operation === 'upgrade_study_path_enrollment',
+)
+malformedRpcResult5A = false
+
+failRpc5A = true
+const beforeFailure5A = requests5A.length
+await assert.rejects(service5A.pause(active5A.id), (error: unknown) => {
+  assert.ok(error instanceof StudentStudyPathCloudError)
+  assert.equal(error.message, 'Study path pause_study_path_enrollment failed')
+  assert.deepEqual(error.cause, { code: '22023', message: 'private SQL detail', details: 'detail', hint: 'hint' })
+  return true
+})
+assert.equal(requests5A.length, beforeFailure5A + 1) // No blind mutation retries.
+failRpc5A = false
+nullRpc5A = true
+await assert.rejects(service5A.resume(active5A.id), (error: unknown) =>
+  error instanceof StudentStudyPathCloudError && error.kind === 'response')
+nullRpc5A = false
+networkRpc5A = true
+const beforeNetworkFailure5A = requests5A.length
+await assert.rejects(service5A.withdraw(active5A.id), StudentStudyPathCloudError)
+assert.equal(requests5A.length, beforeNetworkFailure5A + 1)
+const throwingService5A = createStudentStudyPathCloud(() => { throw new Error('configuration unavailable') })
+await assert.rejects(throwingService5A.enroll(pathId5A, 1), StudentStudyPathCloudError)
+for (const filename of ['student-study-path.ts', 'student-study-path-cloud.ts']) {
+  const source = readFileSync(new URL(`../src/lib/${filename}`, import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /\.insert\s*\(|\.update\s*\(|\.delete\s*\(|\.upsert\s*\(/)
+  assert.doesNotMatch(source, /localStorage|sessionStorage|merge_lesson_progress['"]\s*,|youtube|telegram|providerId|corpusId/i)
+}
+assert.deepEqual(publicStudyPaths, [])
 console.log('selfcheck ok')
