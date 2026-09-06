@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PublicStudyPath } from '../lib/public-study-paths'
 import type { StudyPathDefinition } from '../lib/study-paths'
-import {
-  deriveStudentStudyPath,
-  freshStudyPathEnrollmentEligibility,
-  studyPathEnrollmentActions,
-  resolveStudentStudyPathVersions,
-  selectStudyPathEnrollment,
-  type StudyPathLessonDisplay,
-} from '../lib/student-study-path'
-import { studentStudyPathCloud } from '../lib/student-study-path-cloud'
+import { studyPathEnrollmentActions, type StudyPathLessonDisplay } from '../lib/student-study-path'
 import { supabase, type StudyPathEnrollmentRow } from '../lib/supabase'
+import {
+  observeStudentStudyPath, type StudentStudyPathAction, type StudentStudyPathState,
+} from '../lib/student-study-path-controller'
+export { observeStudentStudyPath } from '../lib/student-study-path-controller'
+export type { StudentStudyPathAction, StudentStudyPathState } from '../lib/student-study-path-controller'
 
 type Props = {
   path: StudyPathDefinition
@@ -40,252 +37,11 @@ export function studentStudyPathPageProps(source: PublicStudyPath): Props {
   return { path, metadata: [...metadata.values()] }
 }
 
-type Loaded = {
-  status: 'loaded'
-  enrollment: StudyPathEnrollmentRow
-  study: ReturnType<typeof deriveStudentStudyPath>
-}
-export type StudentStudyPathAction = 'enroll' | 'pause' | 'resume' | 'withdraw'
-
-export type StudentStudyPathState = (
-  | { status: 'authenticating' | 'loading' | 'signed-out' | 'empty' |
-      'auth-error' | 'enrollment-error' | 'progress-error' | 'unavailable-version' | 'corrupt-enrollment' }
-  | Loaded
-) & {
-  eligibility?: ReturnType<typeof freshStudyPathEnrollmentEligibility>
-  actionBusy?: boolean
-  confirmWithdraw?: boolean
-  mutation?: { action: StudentStudyPathAction; status: 'pending' | 'reconciling' | 'error' }
-}
-
-type Auth = Pick<ReturnType<typeof supabase>['auth'], 'getSession' | 'getUser' | 'onAuthStateChange'>
-type Cloud = Pick<typeof studentStudyPathCloud, 'readEnrollments' | 'readProgress'>
-type Mutations = Pick<typeof studentStudyPathCloud, StudentStudyPathAction>
-type Snapshot = {
-  userId: string
-  enrollment: StudyPathEnrollmentRow | null
-  eligibility: ReturnType<typeof freshStudyPathEnrollmentEligibility>
-}
-type Operation = {
-  action: StudentStudyPathAction
-  userId: string
-  enrollmentId: string | null
-  version: number
-  phase: 'preflight' | 'rpc' | 'reconcile'
-}
-
-/** One read generation spans auth, enrollment and progress; obsolete results never publish. */
-export function observeStudentStudyPath(
-  { path, metadata }: Props,
-  auth: Auth,
-  publish: (state: StudentStudyPathState) => void,
-  cloud: Cloud = studentStudyPathCloud,
-  mutations: Mutations = studentStudyPathCloud,
-) {
-  let generation = 0
-  let disposed = false
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let view: StudentStudyPathState = { status: 'authenticating' }
-  let snapshot: Snapshot | null = null
-  let verifiedOwner: string | null = null
-  let confirmation: Snapshot | null = null
-  let operation: Operation | null = null
-  // This lock survives auth changes until the outstanding action settles.
-  let actionBusy = false
-  const emit = (next: StudentStudyPathState) => {
-    if (disposed) return
-    view = {
-      ...next,
-      actionBusy,
-      confirmWithdraw: confirmation !== null,
-      mutation: operation ? {
-        action: operation.action,
-        status: operation.phase !== 'reconcile' ? 'pending'
-          : next.status === 'authenticating' || next.status === 'loading' ? 'reconciling' : 'error',
-      } : undefined,
-    }
-    publish(view)
-  }
-  const available = (action: StudentStudyPathAction, value: Snapshot) =>
-    action === 'enroll' ? value.eligibility.allowed
-      : !!value.enrollment && studyPathEnrollmentActions(value.enrollment.state)[action]
-  const reconcile = (rows: readonly StudyPathEnrollmentRow[], userId: string) => {
-    if (!operation || operation.phase !== 'reconcile' || operation.userId !== userId) return
-    const { action, enrollmentId, version } = operation
-    const row = rows.find((item) => action === 'enroll'
-      ? item.path_version === version : item.id === enrollmentId)
-    const observed = row && (action === 'enroll' ? row.state === 'active' || row.state === 'paused'
-      : row.state === (action === 'pause' ? 'paused' : action === 'resume' ? 'active' : 'withdrawn'))
-    if (observed) operation = null
-  }
-  const refresh = async () => {
-    if (disposed) return
-    clearTimeout(timer)
-    const request = ++generation
-    snapshot = null
-    confirmation = null
-    const current = () => !disposed && request === generation
-    const set = (state: StudentStudyPathState) => { if (current()) emit(state) }
-    set({ status: 'authenticating' })
-    let userId: string
-    try {
-      const { data, error } = await auth.getSession()
-      if (!current()) return
-      if (error) throw error
-      if (!data.session) {
-        verifiedOwner = null
-        operation = null
-        return set({ status: 'signed-out' })
-      }
-      const { data: verified, error: authError } = await auth.getUser()
-      if (!current()) return
-      if (authError || !verified.user || verified.user.id !== data.session.user.id)
-        return set({ status: 'auth-error' })
-      userId = verified.user.id
-      if (operation && operation.userId !== userId) operation = null
-      verifiedOwner = userId
-    } catch {
-      return set({ status: 'auth-error' })
-    }
-    set({ status: 'loading' })
-    let rows: StudyPathEnrollmentRow[]
-    try {
-      rows = await cloud.readEnrollments(path.pathId)
-    } catch {
-      return set({ status: 'enrollment-error' })
-    }
-    if (!current()) return
-    let enrollment: StudyPathEnrollmentRow | null
-    try {
-      if (rows.some((row) => row.user_id !== userId || row.path_id !== path.pathId))
-        throw new Error('unexpected enrollment owner or path')
-      enrollment = selectStudyPathEnrollment(rows, path.pathId)
-    } catch {
-      return set({ status: 'corrupt-enrollment' })
-    }
-    let eligibility: Snapshot['eligibility']
-    try {
-      eligibility = freshStudyPathEnrollmentEligibility(path, rows)
-    } catch {
-      return set({ status: 'unavailable-version' })
-    }
-    reconcile(rows, userId)
-    if (!enrollment) {
-      snapshot = { userId, enrollment, eligibility }
-      return set({ status: 'empty', eligibility })
-    }
-    let keys: string[]
-    try {
-      const { pinned } = resolveStudentStudyPathVersions(path, enrollment)
-      keys = pinned!.modules.flatMap((module) => module.lessons.map((lesson) => lesson.lessonKey))
-    } catch {
-      return set({ status: 'unavailable-version' })
-    }
-    let progress: Awaited<ReturnType<Cloud['readProgress']>>
-    try {
-      progress = await cloud.readProgress(keys)
-    } catch {
-      return set({ status: 'progress-error' })
-    }
-    if (!current()) return
-    try {
-      const study = deriveStudentStudyPath(path, enrollment, progress, metadata)
-      snapshot = { userId, enrollment, eligibility }
-      set({ status: 'loaded', enrollment, study })
-    } catch {
-      // Never turn an invalid/partial response into an empty progress snapshot.
-      set({ status: 'progress-error' })
-    }
-  }
-
-  const { data: listener } = auth.onAuthStateChange((event, session) => {
-    if (disposed || event === 'INITIAL_SESSION') return
-    ++generation
-    clearTimeout(timer)
-    snapshot = null
-    confirmation = null
-    // Event identity only invalidates intent; getUser still verifies every subsequent read.
-    if (event === 'SIGNED_OUT' || session?.user.id !== operation?.userId) operation = null
-    verifiedOwner = null
-    emit({ status: event === 'SIGNED_OUT' ? 'signed-out' : 'authenticating' })
-    // Leave the Supabase auth callback/lock before calling auth methods again.
-    if (event !== 'SIGNED_OUT') timer = setTimeout(() => void refresh(), 0)
-  })
-  const run = async (action: StudentStudyPathAction, source: Snapshot) => {
-    if (disposed || actionBusy || !available(action, source)) return
-    const intent: Operation = {
-      action, userId: source.userId, enrollmentId: source.enrollment?.id ?? null,
-      version: action === 'enroll' ? path.currentVersion : source.enrollment!.path_version,
-      phase: 'preflight',
-    }
-    actionBusy = true
-    operation = intent
-    confirmation = null
-    emit(view)
-    try {
-      // Verify auth and reread before dispatch, including a new explicit attempt after an error.
-      await refresh()
-      const fresh: Snapshot | null = snapshot
-      if (disposed || operation !== intent) return
-      if (!fresh || fresh.userId !== intent.userId ||
-          (fresh.enrollment?.id ?? null) !== intent.enrollmentId || !available(action, fresh)) {
-        operation = null
-        return
-      }
-      intent.phase = 'rpc'
-      emit(view)
-      try {
-        if (action === 'enroll') await mutations.enroll(path.pathId, path.currentVersion)
-        else await mutations[action](intent.enrollmentId!)
-      } catch {
-        // A rejected request can still have committed. Never replay it or trust its payload.
-      }
-      if (disposed) return
-      if (operation === intent) intent.phase = 'reconcile'
-      // A stale result cannot publish into another account. Same-owner refreshes still reconcile.
-      if (operation === intent || verifiedOwner === intent.userId) await refresh()
-    } finally {
-      actionBusy = false
-      emit(view) // Only the latest read's view; never an RPC row or the captured source snapshot.
-    }
-  }
-  void refresh()
-  return {
-    refresh,
-    async act(action: StudentStudyPathAction) {
-      if (disposed || actionBusy || !snapshot || !available(action, snapshot)) return
-      if (action === 'withdraw') {
-        confirmation = snapshot
-        emit(view)
-        return
-      }
-      await run(action, snapshot)
-    },
-    async confirmWithdrawal() {
-      const source = confirmation
-      if (!source || source !== snapshot || actionBusy) return
-      await run('withdraw', source)
-    },
-    cancelWithdrawal() {
-      confirmation = null
-      emit(view)
-    },
-    dispose() {
-      disposed = true
-      snapshot = null
-      operation = null
-      confirmation = null
-      ++generation
-      clearTimeout(timer)
-      listener.subscription.unsubscribe()
-    },
-  }
-}
-
 const stateLabels: Record<StudyPathEnrollmentRow['state'], string> = {
   active: 'نشط', paused: 'متوقف مؤقتًا', withdrawn: 'منسحب', superseded: 'تمت ترقيته',
 }
 const errors = {
+  'invalid-selection': 'التسجيل المطلوب غير متاح لهذا الحساب في هذا المسار. اختر تسجيلًا من السجل أدناه.',
   'auth-error': 'تعذّر التحقق من حسابك. أعد المحاولة أو انتقل إلى تسجيل الدخول.',
   'enrollment-error': 'تعذّر تحميل تسجيلك في المسار. حاول مجددًا.',
   'progress-error': 'تعذّر تحميل تقدمك كاملًا. حاول مجددًا.',
@@ -350,9 +106,15 @@ function StudentStudyPathContent({ path, metadata, state, retry }: Props & {
         <p className="mt-2 text-muted"><span className="digits">{study.progress.completedLessons}</span> من <span className="digits">{study.progress.totalLessons}</span> درس مكتمل</p>
         <progress className="mt-4 h-3 w-full accent-accent" value={study.progress.completedLessons} max={study.progress.totalLessons} aria-label="نسبة إكمال دروس المسار" />
         {study.completed && <p className="mt-4 text-accent">أكملت جميع دروس هذا الإصدار.</p>}
+        {(enrollment.state === 'withdrawn' || enrollment.state === 'superseded') && (
+          <div className="mt-4 text-sm text-muted" role="status">
+            <p className="font-semibold">تسجيل تاريخي — للقراءة فقط</p>
+            <p>يعرض تقدم دروسك الحالي بحسب منهج هذا الإصدار المثبت، وليس لقطة للتقدم وقت إنهاء التسجيل.</p>
+          </div>
+        )}
         {enrollment.state === 'paused' && <p className="mt-4 text-sm text-muted">تسجيلك متوقف مؤقتًا. يمكنك تصفح الدروس أدناه.</p>}
       </section>
-      {study.continueLesson && !state.actionBusy && !state.confirmWithdraw && (
+      {study.continueLesson && !state.actionBusy && !state.confirmWithdraw && !state.confirmUpgrade && (
         <section aria-labelledby="path-continue-heading">
           <h2 id="path-continue-heading" className="text-xl font-semibold">تابع المسار</h2>
           <a
@@ -416,23 +178,45 @@ type ViewProps = Props & {
   onAction?: (action: StudentStudyPathAction) => void
   onConfirmWithdrawal?: () => void
   onCancelWithdrawal?: () => void
+  onConfirmUpgrade?: () => void
+  onCancelUpgrade?: () => void
+  onSelectEnrollment?: (enrollmentId?: string) => void
 }
 const actionLabels: Record<StudentStudyPathAction, string> = {
+  upgrade: 'ترقية التسجيل إلى الإصدار الحالي',
   enroll: 'التسجيل في الإصدار الحالي', pause: 'إيقاف مؤقت', resume: 'استئناف المسار', withdraw: 'الانسحاب من المسار',
 }
 
-export function StudentStudyPathActions({ state, retry, onAction, onConfirmWithdrawal, onCancelWithdrawal }: Omit<ViewProps, keyof Props>) {
+export function StudentStudyPathActions({ state, retry, onAction, onConfirmWithdrawal, onCancelWithdrawal, onConfirmUpgrade, onCancelUpgrade }: Omit<ViewProps, keyof Props>) {
   const actions: StudentStudyPathAction[] = []
   if (state.status === 'empty' && state.eligibility?.allowed) actions.push('enroll')
   if (state.status === 'loaded') {
     const allowed = studyPathEnrollmentActions(state.enrollment.state)
     for (const action of ['pause', 'resume', 'withdraw'] as const)
       if (allowed[action]) actions.push(action)
+    if (allowed.upgrade && state.upgradePreview) actions.push('upgrade')
   }
   if (!actions.length && !state.mutation) return null
   return (
     <section className="card mt-8 p-5 sm:p-6" aria-label="إدارة التسجيل">
-      {state.confirmWithdraw ? (
+      {state.confirmUpgrade && state.upgradePreview ? (
+        <div role="group" aria-labelledby="upgrade-confirm-heading">
+          <h2 id="upgrade-confirm-heading" className="font-semibold">تأكيد ترقية التسجيل</h2>
+          <p className="mt-2 text-muted">من الإصدار <span className="digits">{state.upgradePreview.sourceVersion}</span> إلى الإصدار <span className="digits">{state.upgradePreview.targetVersion}</span>. الترقية للأمام فقط، وسيصبح تسجيل الإصدار السابق تاريخيًا للقراءة.</p>
+          <ul className="mt-3 list-inside list-disc space-y-2 text-muted">
+            <li>دروس مضافة: <span className="digits">{state.upgradePreview.addedLessonKeys.length}</span></li>
+            <li>دروس لم تعد ضمن المنهج الجديد: <span className="digits">{state.upgradePreview.removedLessonKeys.length}</span></li>
+            <li>دروس مشتركة بين الإصدارين: <span className="digits">{state.upgradePreview.sharedLessonKeys.length}</span></li>
+            <li>{state.upgradePreview.structureOrOrderChanged ? 'تغيّرت بنية الوحدات أو محتوياتها أو ترتيبها أو ترتيب الدروس.' : 'لم تتغير بنية الوحدات أو ترتيب الدروس.'}</li>
+          </ul>
+          <p className="mt-3">تقدمك الحالي في الإصدار الهدف: <span className="digits">{state.upgradePreview.progress.completedLessons} / {state.upgradePreview.progress.totalLessons}</span> درس مكتمل (<span className="digits">{state.upgradePreview.progress.percentage}%</span>).</p>
+          <p className="mt-2 text-muted">سيُعاد حساب التقدم بحسب المنهج الجديد. يُحتسب إكمال الدروس الموجود مسبقًا، ولن يُحذف تقدم أي درس خرج من المنهج.</p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button type="button" className={button} onClick={onCancelUpgrade} disabled={state.actionBusy}>إلغاء الترقية</button>
+            <button type="button" className={button} onClick={onConfirmUpgrade} disabled={state.actionBusy}>تأكيد الترقية إلى الإصدار {state.upgradePreview.targetVersion}</button>
+          </div>
+        </div>
+      ) : state.confirmWithdraw ? (
         <div role="group" aria-labelledby="withdraw-confirm-heading">
           <h2 id="withdraw-confirm-heading" className="font-semibold">تأكيد الانسحاب من المسار</h2>
           <p className="mt-2 text-muted">سيبقى تقدم دروسك محفوظًا، لكن لن تتمكن من التسجيل مجددًا في الإصدار نفسه.</p>
@@ -453,7 +237,7 @@ export function StudentStudyPathActions({ state, retry, onAction, onConfirmWithd
               disabled={state.actionBusy}
               onClick={() => onAction?.(action)}
             >
-              {actionLabels[action]}
+              {action === 'upgrade' ? 'معاينة الترقية إلى الإصدار الحالي' : actionLabels[action]}
             </button>
           ))}
         </div>
@@ -477,10 +261,41 @@ export function StudentStudyPathActions({ state, retry, onAction, onConfirmWithd
   )
 }
 
+function StudentStudyPathHistory({ state, onSelectEnrollment }: ViewProps) {
+  if (!state.history) return null
+  const { live, historical } = state.history
+  if (!live && !historical.length && state.status !== 'invalid-selection') return null
+  const rows = [...(live ? [live] : []), ...historical.slice().sort((a, b) => b.path_version - a.path_version)]
+  return (
+    <nav className="card mt-8 p-5 sm:p-6" dir="rtl" aria-labelledby="path-history-heading">
+      <h2 id="path-history-heading" className="text-lg font-semibold">سجل تسجيلاتك في هذا المسار</h2>
+      <button type="button" className={`${button} mt-3`} disabled={state.actionBusy}
+        aria-current={!live && state.selectedEnrollmentId === undefined ? 'page' : undefined}
+        onClick={() => onSelectEnrollment?.()}>
+        {live ? 'عرض التسجيل الحالي' : 'عرض حالة التسجيل في الإصدار الحالي'}
+      </button>
+      <ul className="mt-3 space-y-2">
+        {rows.map((row) => (
+          <li key={row.id}>
+            <button type="button" className={`${button} max-w-full py-2 text-start`} disabled={state.actionBusy}
+              aria-current={(state.selectedEnrollmentId === row.id ||
+                (state.selectedEnrollmentId === undefined && live?.id === row.id)) ? 'page' : undefined}
+              onClick={() => onSelectEnrollment?.(row.id)}>
+              <span>الإصدار <span className="digits">{row.path_version}</span> · {stateLabels[row.state]}
+                {row !== live && ' · تاريخي للقراءة فقط'}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}
+
 export function StudentStudyPathView(props: ViewProps) {
   return <>
     <StudentStudyPathActions {...props} />
     <StudentStudyPathContent {...props} />
+    <StudentStudyPathHistory {...props} />
   </>
 }
 
@@ -491,7 +306,17 @@ export default function StudentStudyPath(props: Props) {
   useEffect(() => {
     let observer: ReturnType<typeof observeStudentStudyPath>
     try {
-      observer = observeStudentStudyPath(props, supabase().auth, setState)
+      const selected = new URL(window.location.href).searchParams.getAll('enrollment')
+      observer = observeStudentStudyPath(props, supabase().auth, setState, undefined, undefined, {
+        // Duplicate or empty parameters are invalid intent, never a default selection.
+        enrollmentId: selected.length === 0 ? undefined : selected.length === 1 ? selected[0] : '',
+        onSelectionChange(enrollmentId) {
+          const url = new URL(window.location.href)
+          url.search = new URLSearchParams([...url.searchParams].filter(([key]) => key !== 'enrollment')).toString()
+          if (enrollmentId !== undefined) url.searchParams.set('enrollment', enrollmentId)
+          window.history.replaceState(window.history.state, '', url)
+        },
+      })
     } catch {
       setState({ status: 'auth-error' })
       return
@@ -517,6 +342,9 @@ export default function StudentStudyPath(props: Props) {
       if (controller.current) void controller.current.refresh()
       else setAttempt((value) => value + 1)
     }}
+    onSelectEnrollment={(id) => { void controller.current?.selectEnrollment(id) }}
+    onConfirmUpgrade={() => { void controller.current?.confirmUpgrade() }}
+    onCancelUpgrade={() => controller.current?.cancelUpgrade()}
     onAction={(action) => { void controller.current?.act(action) }}
     onConfirmWithdrawal={() => { void controller.current?.confirmWithdrawal() }}
     onCancelWithdrawal={() => controller.current?.cancelWithdrawal()}

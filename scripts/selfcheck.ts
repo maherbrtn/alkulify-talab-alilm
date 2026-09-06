@@ -2758,7 +2758,7 @@ const cloud5B = {
   },
   readProgress: async (keys: readonly string[]) => {
     calls5B.push('progress')
-    assert.deepEqual(keys, lessonKeys5A.slice(0, 2)) // Pinned v1, never current v2.
+    assert.deepEqual(keys, lessonKeys5A) // Union supports target preview; displayed progress stays pinned.
     if (progressFailure5B) throw new Error('partial read failed')
     return readProgress5B(keys)
   },
@@ -2913,7 +2913,8 @@ for (const state of ['active', 'paused', 'withdrawn', 'superseded'] as const) {
 const { StudentStudyPathActions } = await import('../src/islands/StudentStudyPath.tsx')
 type Action5C = import('../src/islands/StudentStudyPath.tsx').StudentStudyPathAction
 const active5C = enrollment5A({ path_version: 2 })
-function harness5C(initialRows: Enrollment5A[] = [active5C]) {
+function harness5C(initialRows: Enrollment5A[] = [active5C],
+  navigation: Parameters<typeof observeStudentStudyPath>[5] = {}, path = path5A) {
   let userId: string | null = active5C.user_id
   let state: State5B = { status: 'authenticating' }
   let onAuth: (event: string, session: { user: { id: string } } | null) => void = () => {}
@@ -2923,12 +2924,20 @@ function harness5C(initialRows: Enrollment5A[] = [active5C]) {
     calls: [] as { action: Action5C; args: (string | number)[] }[],
     events: [] as string[],
     states: [] as State5B[],
+    returnUnscopedRows: false,
     beforeRead: async () => {},
     beforeProgress: async () => {},
     mutate: async (_action: Action5C, _args: (string | number)[]) => {},
     apply(action: Action5C, args: (string | number)[]) {
       if (action === 'enroll') {
         h.rows.push(enrollment5A({ id: uuid5A(120), user_id: userId!, path_version: Number(args[1]) }))
+      } else if (action === 'upgrade') {
+        const target = enrollment5A({ id: uuid5A(120), user_id: userId!, path_version: Number(args[1]) })
+        h.rows = h.rows.map((row) => row.id !== args[0] ? row : {
+          ...row, state: 'superseded', superseded_by_enrollment_id: target.id,
+          superseded_at: '2026-09-06T00:00:00.000Z',
+        })
+        h.rows.push(target)
       } else {
         h.rows = h.rows.map((row) => row.id !== args[0] ? row : {
           ...row, state: action === 'pause' ? 'paused' : action === 'resume' ? 'active' : 'withdrawn',
@@ -2961,7 +2970,7 @@ function harness5C(initialRows: Enrollment5A[] = [active5C]) {
     readEnrollments: async (pathId: string) => {
       h.events.push('enrollment-read')
       await h.beforeRead()
-      return structuredClone(h.rows.filter((row) => row.path_id === pathId && row.user_id === userId))
+      return structuredClone(h.returnUnscopedRows ? h.rows : h.rows.filter((row) => row.path_id === pathId && row.user_id === userId))
     },
     readProgress: async (keys: readonly string[]) => {
       h.events.push('progress-read')
@@ -2976,7 +2985,7 @@ function harness5C(initialRows: Enrollment5A[] = [active5C]) {
     // Intentionally untrustworthy response: only the subsequent owner-visible read matters.
     return enrollment5A({ user_id: uuid5A(999), state: 'withdrawn', path_version: 99 })
   }
-  const reader = observeStudentStudyPath(props5B, auth, (next) => {
+  const reader = observeStudentStudyPath({ ...props5B, path }, auth, (next) => {
     state = next
     h.states.push(next)
   }, cloud, {
@@ -2984,7 +2993,8 @@ function harness5C(initialRows: Enrollment5A[] = [active5C]) {
     pause: (id) => dispatch('pause', id),
     resume: (id) => dispatch('resume', id),
     withdraw: (id) => dispatch('withdraw', id),
-  })
+    upgrade: (id, version) => dispatch('upgrade', id, version),
+  }, navigation)
   return { reader, h }
 }
 const loaded5C = (h: ReturnType<typeof harness5C>['h']) => {
@@ -3224,6 +3234,349 @@ for (const event of ['TOKEN_REFRESHED', 'SIGNED_IN']) {
   assert.equal(loaded5C(h).study.completed, true)
   assert.equal(loaded5C(h).enrollment.state, 'active')
   assert.equal(h.calls.length, 0)
+  reader.dispose()
+}
+
+// Slice 5D: owner history, deliberate upgrades and adversarial authoritative rereads.
+const terminal5D = enrollment5A({ state: 'withdrawn' })
+for (const terminalState of ['withdrawn', 'superseded'] as const) {
+  const historical = { ...terminal5D, state: terminalState }
+  const { h, reader } = harness5C([historical, { ...active5C, id: uuid5A(130) }])
+  await reader.refresh()
+  assert.equal(loaded5C(h).enrollment.path_version, 2) // Live wins with history present.
+  assert.equal(h.state().history?.historical.length, 1)
+  await reader.selectEnrollment(historical.id)
+  assert.equal(loaded5C(h).enrollment.state, terminalState)
+  assert.equal(loaded5C(h).study.version.version, 1)
+  assert.equal(loaded5C(h).study.progress.percentage, 50)
+  assert.equal(loaded5C(h).study.continueLesson, null)
+  assert.equal(h.state().upgradePreview, undefined)
+  const html = render5B(h.state())
+  assert.match(html, /تسجيل تاريخي — للقراءة فقط/)
+  assert.match(html, /وليس لقطة/)
+  assert.match(html, /href="\/lessons\/test-0\/"/)
+  assert.doesNotMatch(html, /تابع المسار|إيقاف مؤقت|استئناف المسار|الانسحاب من المسار|معاينة الترقية/)
+  assert.doesNotMatch(html, new RegExp(historical.id)) // No opaque identities in visible markup.
+  for (const action of ['enroll', 'pause', 'resume', 'withdraw', 'upgrade'] as const) await reader.act(action)
+  await reader.confirmUpgrade()
+  await reader.confirmWithdrawal()
+  assert.equal(h.calls.length, 0)
+  h.progress = [progress5A(lessonKeys5A[0], true), progress5A(lessonKeys5A[1], true)]
+  await reader.refresh()
+  assert.equal(loaded5C(h).study.progress.percentage, 100) // Current progress, not a snapshot.
+  await reader.selectEnrollment()
+  assert.equal(loaded5C(h).enrollment.path_version, 2)
+  reader.dispose()
+}
+for (const id of ['', 'not-a-uuid', active5A.id.toUpperCase().replace('4000', 'X000'), uuid5A(999)]) {
+  const { h, reader } = harness5C([active5C], { enrollmentId: id })
+  await reader.refresh()
+  assert.equal(h.state().status, 'invalid-selection')
+  assert.doesNotMatch(render5B(h.state()), /<progress|تابع المسار/)
+  for (const action of ['enroll', 'pause', 'resume', 'withdraw', 'upgrade'] as const) await reader.act(action)
+  assert.equal(h.calls.length, 0)
+  reader.dispose()
+}
+// URL intent cannot authorize a row, even if a broken transport returns that exact row.
+for (const foreign of [otherPath5A, enrollment5A({ user_id: uuid5A(999) })]) {
+  const { h, reader } = harness5C([foreign], { enrollmentId: foreign.id })
+  await reader.refresh()
+  assert.equal(h.state().status, 'invalid-selection') // Normal owner/path-scoped read excludes it.
+  h.returnUnscopedRows = true
+  await reader.refresh()
+  assert.equal(h.state().status, 'corrupt-enrollment')
+  assert.equal(h.state().history, undefined)
+  assert.equal(h.calls.length, 0)
+  reader.dispose()
+}
+{
+  const { h, reader } = harness5C([terminal5D], { enrollmentId: terminal5D.id },
+    { ...path5A, versions: [target5A] })
+  await reader.refresh()
+  assert.equal(h.state().status, 'unavailable-version')
+  assert.equal(h.state().history?.historical.length, 1)
+  assert.doesNotMatch(render5B(h.state()), /<progress|تابع المسار/)
+  reader.dispose()
+}
+{
+  const { h, reader } = harness5C([terminal5D], { enrollmentId: terminal5D.id })
+  await reader.refresh()
+  await reader.act('enroll')
+  assert.equal(h.calls.length, 0)
+  await reader.selectEnrollment()
+  assert.equal(h.state().eligibility?.allowed, true)
+  assert.match(render5B(h.state()), /سجل تسجيلاتك/)
+  await reader.act('enroll')
+  assert.equal(h.calls.length, 1)
+  assert.equal(h.state().history?.historical.length, 1)
+  reader.dispose()
+}
+// Fail closed with corrupt multiple-live rows, even when selecting a valid terminal row.
+{
+  const historical = enrollment5A({ id: uuid5A(140), path_version: 3, state: 'withdrawn' })
+  const { h, reader } = harness5C([active5A, { ...active5C, id: uuid5A(141) }, historical], { enrollmentId: historical.id })
+  await reader.refresh()
+  assert.equal(h.state().status, 'corrupt-enrollment')
+  assert.equal(h.state().history, undefined)
+  reader.dispose()
+}
+for (const sourceState of ['active', 'paused'] as const) {
+  const source = { ...active5A, state: sourceState }
+  const selected: (string | undefined)[] = []
+  const { h, reader } = harness5C([source], { enrollmentId: source.id, onSelectionChange: (id) => selected.push(id) })
+  h.progress = [progress5A(lessonKeys5A[0], true), progress5A(lessonKeys5A[1], true)]
+  await reader.refresh()
+  const canonicalBefore = JSON.stringify(path5A)
+  const progressBefore = JSON.stringify(h.progress)
+  assert.match(renderActions5C(h.state()), /معاينة الترقية/)
+  assert.deepEqual(h.state().upgradePreview, {
+    ...studyPathUpgradePreview(source5A, target5A), progress: deriveStudyPathProgress(target5A, h.progress),
+  })
+  assert.equal(h.state().upgradePreview?.progress.completedLessons, 1)
+  await reader.confirmUpgrade() // Confirmation without an intent cannot dispatch.
+  assert.equal(h.calls.length, 0)
+  await reader.act('upgrade')
+  assert.equal(h.calls.length, 0)
+  assert.equal(h.state().confirmUpgrade, true)
+  assert.match(renderActions5C(h.state()), /تأكيد الترقية إلى الإصدار 2/)
+  assert.match(renderActions5C(h.state()), /دروس مضافة|لن يُحذف تقدم/)
+  reader.cancelUpgrade()
+  await reader.confirmUpgrade()
+  assert.equal(h.calls.length, 0)
+  await reader.act('upgrade')
+  h.events.length = 0
+  await Promise.all([reader.confirmUpgrade(), reader.confirmUpgrade(), reader.act('pause'), reader.act('withdraw')])
+  assert.deepEqual(h.calls, [{ action: 'upgrade', args: [source.id, 2] }])
+  assert.deepEqual(h.events, ['session', 'user', 'enrollment-read', 'progress-read', 'rpc:upgrade',
+    'session', 'user', 'enrollment-read', 'progress-read'])
+  assert.equal(loaded5C(h).enrollment.path_version, 2)
+  assert.equal(loaded5C(h).enrollment.state, 'active') // Paused source does not imply paused target.
+  assert.equal(loaded5C(h).enrollment.user_id, active5A.user_id) // Lying RPC payload ignored.
+  assert.equal(loaded5C(h).study.progress.percentage, 50)
+  assert.equal(loaded5C(h).study.continueLesson?.lessonKey, lessonKeys5A[2])
+  assert.equal(h.state().history?.historical[0].state, 'superseded')
+  assert.equal(h.state().selectedEnrollmentId, undefined)
+  assert.equal(selected.at(-1), undefined)
+  assert.equal(h.state().mutation, undefined)
+  assert.equal(JSON.stringify(path5A), canonicalBefore)
+  assert.equal(JSON.stringify(h.progress), progressBefore)
+  reader.dispose()
+}
+for (const scenario of ['terminal', 'equal', 'backward', 'terminal-target', 'missing-source', 'missing-current'] as const) {
+  const rows = scenario === 'terminal' ? [terminal5D]
+    : scenario === 'equal' || scenario === 'backward' ? [active5C]
+    : scenario === 'terminal-target' ? [active5A, history5A] : [active5A]
+  const path = scenario === 'backward' ? { ...path5A, currentVersion: 1 }
+    : scenario === 'missing-source' ? { ...path5A, versions: [target5A] }
+    : scenario === 'missing-current' ? { ...path5A, versions: [source5A] } : path5A
+  const { h, reader } = harness5C(rows, {}, path)
+  await reader.refresh()
+  assert.equal(h.state().upgradePreview, undefined)
+  assert.doesNotMatch(renderActions5C(h.state()), /معاينة الترقية/)
+  await reader.act('upgrade')
+  await reader.confirmUpgrade()
+  assert.equal(h.calls.length, 0)
+  reader.dispose()
+}
+for (const outcome of ['success-unchanged', 'error-unchanged', 'error-committed', 'wrong-link', 'terminal-target'] as const) {
+  const { h, reader } = harness5C([active5A])
+  await reader.refresh()
+  h.mutate = async (action, args) => {
+    if (['error-committed', 'wrong-link', 'terminal-target'].includes(outcome)) h.apply(action, args)
+    if (outcome === 'wrong-link') h.rows[0].superseded_by_enrollment_id = uuid5A(999)
+    if (outcome === 'terminal-target') h.rows[1].state = 'withdrawn'
+    if (outcome !== 'success-unchanged') throw new Error('response lost')
+  }
+  await reader.act('upgrade')
+  await reader.confirmUpgrade()
+  assert.equal(h.calls.length, 1)
+  assert.equal(h.state().mutation?.status, outcome === 'error-committed' ? undefined : 'error')
+  if (outcome.endsWith('unchanged')) assert.equal(loaded5C(h).enrollment.path_version, 1)
+  await reader.refresh() // Error retry only reconciles.
+  await reader.confirmUpgrade() // No retained confirmation.
+  assert.equal(h.calls.length, 1)
+  if (outcome.endsWith('unchanged')) {
+    h.mutate = async (action, args) => h.apply(action, args)
+    await reader.act('upgrade') // A new intent and deliberate confirmation are required.
+    assert.equal(h.calls.length, 1)
+    await reader.confirmUpgrade()
+    assert.equal(h.calls.length, 2)
+    assert.equal(h.state().mutation, undefined)
+  }
+  reader.dispose()
+}
+// A new confirmation cannot bypass fresh auth, source identity, version or target eligibility.
+for (const change of ['terminal-target', 'source-terminal', 'source-id', 'source-version', 'account', 'refresh', 'selection', 'progress-error'] as const) {
+  const { h, reader } = harness5C([active5A])
+  await reader.refresh()
+  await reader.act('upgrade')
+  if (change === 'terminal-target') h.rows.push(history5A)
+  if (change === 'source-terminal') h.rows[0].state = 'withdrawn'
+  if (change === 'source-id') h.rows[0].id = uuid5A(150)
+  if (change === 'source-version') h.rows[0].path_version = 2
+  if (change === 'account') h.setOwner(uuid5A(151))
+  if (change === 'refresh') await reader.refresh()
+  if (change === 'selection') await reader.selectEnrollment(uuid5A(999))
+  if (change === 'progress-error') h.beforeProgress = async () => { throw new Error('read failed') }
+  await reader.confirmUpgrade()
+  assert.equal(h.calls.length, 0)
+  reader.dispose()
+}
+for (const failure of ['enrollment', 'progress'] as const) {
+  const { h, reader } = harness5C([active5A])
+  await reader.refresh()
+  const fail = async () => { if (h.calls.length) throw new Error('post-RPC read failed') }
+  if (failure === 'enrollment') h.beforeRead = fail
+  else h.beforeProgress = fail
+  await reader.act('upgrade')
+  await reader.confirmUpgrade()
+  assert.equal(h.state().status, failure === 'enrollment' ? 'enrollment-error' : 'progress-error')
+  assert.doesNotMatch(render5B(h.state()), /<progress|0%/)
+  h.beforeRead = h.beforeProgress = async () => {}
+  await reader.refresh()
+  assert.equal(loaded5C(h).enrollment.path_version, 2)
+  assert.equal(h.state().mutation, undefined)
+  assert.equal(h.calls.length, 1)
+  reader.dispose()
+}
+// The lifecycle lock covers preflight, RPC and post-RPC reads in both directions.
+for (const stage of ['preflight', 'rpc', 'reconcile'] as const) {
+  const { h, reader } = harness5C([active5A])
+  await reader.refresh()
+  const reached = deferred5B<void>(), release = deferred5B<void>()
+  if (stage === 'rpc') h.mutate = async (action, args) => { reached.resolve(); await release.promise; h.apply(action, args) }
+  else h.beforeRead = async () => {
+    if ((stage === 'preflight' && !h.calls.length) || (stage === 'reconcile' && h.calls.length)) {
+      reached.resolve(); await release.promise
+    }
+  }
+  await reader.act('upgrade')
+  const pending = reader.confirmUpgrade()
+  await reached.promise
+  assert.equal(h.state().actionBusy, true)
+  for (const action of ['upgrade', 'pause', 'resume', 'withdraw', 'enroll'] as const) await reader.act(action)
+  await reader.confirmUpgrade()
+  await reader.selectEnrollment(uuid5A(999))
+  assert.equal(h.calls.length, stage === 'preflight' ? 0 : 1)
+  const buttons = render5B(h.state()).match(/<button\b[^>]*>/g) ?? []
+  assert.ok(buttons.every((tag) => tag.includes('disabled=""')))
+  release.resolve()
+  await pending
+  assert.equal(h.calls.length, 1)
+  assert.equal(loaded5C(h).enrollment.path_version, 2)
+  reader.dispose()
+}
+{
+  const { h, reader } = harness5C([active5A])
+  await reader.refresh()
+  const reached = deferred5B<void>(), release = deferred5B<void>()
+  h.mutate = async () => { reached.resolve(); await release.promise }
+  const pause = reader.act('pause')
+  await reached.promise
+  await reader.act('upgrade')
+  await reader.confirmUpgrade()
+  assert.equal(h.state().confirmUpgrade, false)
+  assert.deepEqual(h.calls.map((call) => call.action), ['pause'])
+  release.resolve()
+  await pause
+  reader.dispose()
+}
+for (const interruption of ['signout', 'account-change', 'dispose', 'TOKEN_REFRESHED', 'SIGNED_IN', 'focus'] as const) {
+  const changes: (string | undefined)[] = []
+  const { h, reader } = harness5C([active5A], { enrollmentId: active5A.id, onSelectionChange: (id) => changes.push(id) })
+  await reader.refresh()
+  const reached = deferred5B<void>(), release = deferred5B<void>()
+  h.mutate = async () => { reached.resolve(); await release.promise; throw new Error('response lost') }
+  await reader.act('upgrade')
+  const pending = reader.confirmUpgrade()
+  await reached.promise
+  if (interruption === 'signout') h.authEvent('SIGNED_OUT', null)
+  if (interruption === 'account-change') {
+    h.authEvent('SIGNED_IN', uuid5A(160))
+    await reader.refresh()
+    assert.equal(h.state().history?.historical.length, 0)
+    await reader.act('enroll')
+  }
+  if (interruption === 'dispose') reader.dispose()
+  if (interruption === 'TOKEN_REFRESHED' || interruption === 'SIGNED_IN') h.authEvent(interruption)
+  if (['focus', 'TOKEN_REFRESHED', 'SIGNED_IN'].includes(interruption)) await reader.refresh()
+  const publications = h.states.length
+  release.resolve()
+  await pending
+  assert.equal(h.calls.length, 1)
+  if (interruption === 'signout') assert.equal(h.state().status, 'signed-out')
+  if (interruption === 'account-change' || interruption === 'signout') {
+    assert.equal(h.state().mutation, undefined)
+    assert.equal(h.state().selectedEnrollmentId, undefined)
+    assert.equal(changes.at(-1), undefined)
+  } else if (interruption === 'dispose') assert.equal(h.states.length, publications)
+  else {
+    assert.equal(h.state().mutation?.status, 'error')
+    assert.equal(loaded5C(h).enrollment.path_version, 1)
+    await reader.refresh()
+    assert.equal(h.calls.length, 1)
+  }
+  reader.dispose()
+}
+// Historical navigation clears immediately on an account event and on silent verified changes.
+for (const event of [true, false]) {
+  const { h, reader } = harness5C([terminal5D], { enrollmentId: terminal5D.id })
+  await reader.refresh()
+  assert.equal(loaded5C(h).enrollment.state, 'withdrawn')
+  const newOwner = uuid5A(170)
+  h.rows.push(enrollment5A({ id: uuid5A(171), user_id: newOwner, path_version: 2 }))
+  if (event) {
+    h.authEvent('SIGNED_IN', newOwner)
+    assert.equal(h.state().history, undefined)
+  } else h.setOwner(newOwner)
+  await reader.refresh()
+  assert.equal(loaded5C(h).enrollment.user_id, newOwner)
+  assert.equal(h.state().selectedEnrollmentId, undefined)
+  assert.equal(h.state().history?.historical.length, 0)
+  reader.dispose()
+}
+// A stale history/progress read cannot override a newer live selection or survive disposal.
+for (const interruption of ['newer-selection', 'dispose'] as const) {
+  const { h, reader } = harness5C([terminal5D, { ...active5C, id: uuid5A(180) }])
+  await reader.refresh()
+  const reached = deferred5B<void>(), release = deferred5B<void>()
+  h.beforeProgress = async () => { reached.resolve(); await release.promise }
+  const older = reader.selectEnrollment(terminal5D.id)
+  await reached.promise
+  if (interruption === 'dispose') reader.dispose()
+  else {
+    h.beforeProgress = async () => {}
+    await reader.selectEnrollment()
+    assert.equal(loaded5C(h).enrollment.path_version, 2)
+  }
+  const state = h.state(), publications = h.states.length
+  release.resolve()
+  await older
+  assert.equal(h.state(), state)
+  assert.equal(h.states.length, publications)
+  reader.dispose()
+}
+for (const filename of ['../src/lib/student-study-path-controller.ts', '../src/islands/StudentStudyPath.tsx']) {
+  const source = readFileSync(new URL(filename, import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /\.(from|rpc|insert|update|delete|upsert)\s*\(/)
+  assert.doesNotMatch(source, /localStorage|sessionStorage|merge_lesson_progress|youtube|telegram|providerId|corpusId/i)
+}
+assert.deepEqual(publicStudyPaths, [])
+// A late commit is reconciled before a new explicit intent can replace the old one.
+for (const nextAction of ['upgrade', 'pause'] as const) {
+  const { h, reader } = harness5C([active5A], { enrollmentId: active5A.id })
+  await reader.refresh()
+  h.mutate = async () => { throw new Error('response lost') }
+  await reader.act('upgrade')
+  await reader.confirmUpgrade()
+  assert.equal(h.state().mutation?.status, 'error')
+  h.apply('upgrade', [active5A.id, 2]) // Commit becomes visible after the uncertain reread.
+  await reader.act(nextAction)
+  if (nextAction === 'upgrade') await reader.confirmUpgrade()
+  assert.equal(h.calls.length, 1)
+  assert.equal(h.state().mutation, undefined)
+  assert.equal(h.state().selectedEnrollmentId, undefined)
+  assert.equal(loaded5C(h).enrollment.path_version, 2)
   reader.dispose()
 }
 console.log('selfcheck ok')
