@@ -2718,7 +2718,7 @@ for (const event of ['pageshow', 'focus']) {
   assert.ok(source5B.includes(`addEventListener('${event}', refresh)`))
   assert.ok(source5B.includes(`removeEventListener('${event}', refresh)`))
 }
-assert.doesNotMatch(source5B, /localStorage|sessionStorage|service_role|\.(from|rpc|enroll|pause|resume|withdraw|upgrade)\s*\(/)
+assert.doesNotMatch(source5B, /localStorage|sessionStorage|service_role|\.(from|rpc|insert|update|delete|upsert|upgrade)\s*\(/)
 
 const props5B = { path: path5A, metadata: display5A }
 let state5B: State5B = { status: 'authenticating' }
@@ -2907,5 +2907,323 @@ for (const state of ['active', 'paused', 'withdrawn', 'superseded'] as const) {
   assert.match(html, /غير مكتمل/)
   if (state === 'active') assert.match(html, /تابع المسار/)
   else assert.doesNotMatch(html, /تابع المسار/)
+}
+
+// Slice 5C: lifecycle dispatch, confirmation and authoritative reconciliation (no hosted I/O).
+const { StudentStudyPathActions } = await import('../src/islands/StudentStudyPath.tsx')
+type Action5C = import('../src/islands/StudentStudyPath.tsx').StudentStudyPathAction
+const active5C = enrollment5A({ path_version: 2 })
+function harness5C(initialRows: Enrollment5A[] = [active5C]) {
+  let userId: string | null = active5C.user_id
+  let state: State5B = { status: 'authenticating' }
+  let onAuth: (event: string, session: { user: { id: string } } | null) => void = () => {}
+  const h = {
+    rows: structuredClone(initialRows),
+    progress: [progress5A(lessonKeys5A[1], true)],
+    calls: [] as { action: Action5C; args: (string | number)[] }[],
+    events: [] as string[],
+    states: [] as State5B[],
+    beforeRead: async () => {},
+    beforeProgress: async () => {},
+    mutate: async (_action: Action5C, _args: (string | number)[]) => {},
+    apply(action: Action5C, args: (string | number)[]) {
+      if (action === 'enroll') {
+        h.rows.push(enrollment5A({ id: uuid5A(120), user_id: userId!, path_version: Number(args[1]) }))
+      } else {
+        h.rows = h.rows.map((row) => row.id !== args[0] ? row : {
+          ...row, state: action === 'pause' ? 'paused' : action === 'resume' ? 'active' : 'withdrawn',
+        })
+      }
+    },
+    state: () => state,
+    authEvent(event: string, owner: string | null = userId) {
+      userId = owner
+      onAuth(event, userId ? { user: { id: userId } } : null)
+    },
+    setOwner(owner: string | null) { userId = owner },
+  }
+  h.mutate = async (action, args) => h.apply(action, args)
+  const auth = {
+    getSession: async () => {
+      h.events.push('session')
+      return { data: { session: userId ? { user: { id: userId } } : null }, error: null }
+    },
+    getUser: async () => {
+      h.events.push('user')
+      return { data: { user: userId ? { id: userId } : null }, error: null }
+    },
+    onAuthStateChange: (callback: typeof onAuth) => {
+      onAuth = callback
+      return { data: { subscription: { unsubscribe() {} } } }
+    },
+  } as unknown as Auth5B
+  const cloud = {
+    readEnrollments: async (pathId: string) => {
+      h.events.push('enrollment-read')
+      await h.beforeRead()
+      return structuredClone(h.rows.filter((row) => row.path_id === pathId && row.user_id === userId))
+    },
+    readProgress: async (keys: readonly string[]) => {
+      h.events.push('progress-read')
+      await h.beforeProgress()
+      return structuredClone(h.progress.filter((row) => keys.includes(row.lesson_key)))
+    },
+  }
+  const dispatch = async (action: Action5C, ...args: (string | number)[]) => {
+    h.events.push(`rpc:${action}`)
+    h.calls.push({ action, args })
+    await h.mutate(action, args)
+    // Intentionally untrustworthy response: only the subsequent owner-visible read matters.
+    return enrollment5A({ user_id: uuid5A(999), state: 'withdrawn', path_version: 99 })
+  }
+  const reader = observeStudentStudyPath(props5B, auth, (next) => {
+    state = next
+    h.states.push(next)
+  }, cloud, {
+    enroll: (id, version) => dispatch('enroll', id, version),
+    pause: (id) => dispatch('pause', id),
+    resume: (id) => dispatch('resume', id),
+    withdraw: (id) => dispatch('withdraw', id),
+  })
+  return { reader, h }
+}
+const loaded5C = (h: ReturnType<typeof harness5C>['h']) => {
+  const state = h.state()
+  assert.equal(state.status, 'loaded')
+  return state as Extract<State5B, { status: 'loaded' }>
+}
+const renderActions5C = (state: State5B) => renderToStaticMarkup(createElement(StudentStudyPathActions, {
+  state, retry() {}, onAction() {}, onConfirmWithdrawal() {}, onCancelWithdrawal() {},
+}))
+
+// Only the built current version is offered. RPC success alone cannot manufacture a view.
+{
+  const { h, reader } = harness5C([])
+  await reader.refresh()
+  assert.equal(h.state().status, 'empty')
+  assert.equal(h.state().eligibility?.allowed, true)
+  assert.match(renderActions5C(h.state()), /التسجيل في الإصدار الحالي/)
+  h.events.length = 0
+  await reader.act('enroll')
+  assert.deepEqual(h.calls, [{ action: 'enroll', args: [path5A.pathId, path5A.currentVersion] }])
+  assert.deepEqual(h.events, ['session', 'user', 'enrollment-read', 'rpc:enroll', 'session', 'user', 'enrollment-read', 'progress-read'])
+  assert.equal(loaded5C(h).enrollment.path_version, 2)
+  assert.equal(loaded5C(h).enrollment.user_id, active5C.user_id)
+  assert.equal(loaded5C(h).study.progress.percentage, 50)
+  assert.equal(h.state().mutation, undefined)
+  reader.dispose()
+}
+for (const state of ['active', 'paused', 'withdrawn', 'superseded'] as const) {
+  const enrollment = { ...active5C, state }
+  const html = renderActions5C({ status: 'loaded', enrollment,
+    study: deriveStudentStudyPath(path5A, enrollment, [], display5A) })
+  assert.equal(html.includes('إيقاف مؤقت'), state === 'active')
+  assert.equal(html.includes('استئناف المسار'), state === 'paused')
+  assert.equal(html.includes('الانسحاب من المسار'), state === 'active' || state === 'paused')
+  const { h, reader } = harness5C([enrollment])
+  await reader.refresh()
+  if (state === 'active' || state === 'paused') {
+    await reader.act(state === 'active' ? 'resume' : 'pause')
+    assert.equal(h.calls.length, 0)
+    await reader.act(state === 'active' ? 'pause' : 'resume')
+    assert.equal(h.calls.length, 1)
+    assert.equal(loaded5C(h).enrollment.state, state === 'active' ? 'paused' : 'active')
+  } else {
+    assert.equal(h.state().status, 'empty')
+    assert.deepEqual(h.state().eligibility, { allowed: false, reason: 'terminal-version' })
+    assert.doesNotMatch(renderActions5C(h.state()), /<button/)
+    for (const action of ['enroll', 'pause', 'resume', 'withdraw'] as const) await reader.act(action)
+    await reader.confirmWithdrawal()
+    assert.equal(h.calls.length, 0)
+  }
+  reader.dispose()
+}
+// A terminal older version doesn't block fresh enrollment into an eligible current version.
+{
+  const { h, reader } = harness5C([enrollment5A({ state: 'withdrawn', path_version: 1 })])
+  await reader.refresh()
+  assert.equal(h.state().eligibility?.allowed, true)
+  await reader.act('enroll')
+  assert.equal(loaded5C(h).enrollment.path_version, 2)
+  assert.equal(h.calls.length, 1)
+  reader.dispose()
+}
+for (const state of ['active', 'paused'] as const) {
+  const { h, reader } = harness5C([{ ...active5C, state }])
+  await reader.refresh()
+  const progressBefore = JSON.stringify(h.progress)
+  await reader.confirmWithdrawal() // No invisible bypass of the confirmation gate.
+  assert.equal(h.calls.length, 0)
+  await reader.act('withdraw')
+  assert.equal(h.calls.length, 0)
+  assert.equal(h.state().confirmWithdraw, true)
+  assert.match(renderActions5C(h.state()), /تأكيد الانسحاب/)
+  reader.cancelWithdrawal()
+  await reader.confirmWithdrawal()
+  assert.equal(h.calls.length, 0)
+  await reader.act('withdraw')
+  await Promise.all([reader.confirmWithdrawal(), reader.confirmWithdrawal(), reader.act('pause')])
+  assert.deepEqual(h.calls, [{ action: 'withdraw', args: [active5C.id] }])
+  assert.equal(h.state().status, 'empty')
+  assert.deepEqual(h.state().eligibility, { allowed: false, reason: 'terminal-version' })
+  assert.equal(JSON.stringify(h.progress), progressBefore)
+  assert.equal(h.rows[0].state, 'withdrawn')
+  reader.dispose()
+}
+// Delay the post-RPC read: no assumed paused/empty/0% view may appear before it completes.
+{
+  const { h, reader } = harness5C()
+  await reader.refresh()
+  const reached = deferred5B<void>()
+  const release = deferred5B<void>()
+  h.beforeRead = async () => {
+    if (h.calls.length) { reached.resolve(); await release.promise }
+  }
+  const action = reader.act('pause')
+  assert.equal(h.state().actionBusy, true)
+  await reached.promise
+  assert.equal(h.state().status, 'loading')
+  assert.equal(h.state().mutation?.status, 'reconciling')
+  assert.doesNotMatch(render5B(h.state()), /<progress|0%/)
+  await reader.act('withdraw')
+  await reader.act('enroll')
+  assert.equal(h.calls.length, 1)
+  release.resolve()
+  await action
+  assert.equal(loaded5C(h).enrollment.state, 'paused')
+  assert.equal(h.state().actionBusy, false)
+  reader.dispose()
+}
+// Success with an unchanged read is also unconfirmed. A network failure may have committed.
+for (const outcome of ['success-unchanged', 'error-unchanged', 'error-changed'] as const) {
+  const { h, reader } = harness5C()
+  await reader.refresh()
+  h.mutate = async (action, args) => {
+    if (outcome === 'error-changed') h.apply(action, args)
+    if (outcome !== 'success-unchanged') throw new Error('response lost')
+  }
+  await reader.act('pause')
+  assert.equal(h.calls.length, 1)
+  assert.equal(loaded5C(h).enrollment.state, outcome === 'error-changed' ? 'paused' : 'active')
+  assert.equal(h.state().mutation?.status, outcome === 'error-changed' ? undefined : 'error')
+  assert.equal(loaded5C(h).study.progress.percentage, 50)
+  await reader.refresh() // The error's retry handler only re-reads; never replays the RPC.
+  assert.equal(h.calls.length, 1)
+  assert.equal(h.state().mutation?.status, outcome === 'error-changed' ? undefined : 'error')
+  reader.dispose()
+}
+for (const failure of ['enrollment', 'progress'] as const) {
+  const { h, reader } = harness5C()
+  await reader.refresh()
+  const failAfterRpc = async () => { if (h.calls.length) throw new Error('read failed') }
+  if (failure === 'enrollment') h.beforeRead = failAfterRpc
+  else h.beforeProgress = failAfterRpc
+  await reader.act('pause')
+  assert.equal(h.state().status, failure === 'enrollment' ? 'enrollment-error' : 'progress-error')
+  if (failure === 'enrollment') assert.equal(h.state().mutation?.status, 'error')
+  assert.doesNotMatch(render5B(h.state()), /<progress|0%/)
+  h.beforeRead = h.beforeProgress = async () => {}
+  await reader.refresh()
+  assert.equal(loaded5C(h).enrollment.state, 'paused')
+  assert.equal(h.state().mutation, undefined)
+  assert.equal(h.calls.length, 1)
+  reader.dispose()
+}
+// The lock is acquired before any await, including the preflight read.
+{
+  const { h, reader } = harness5C()
+  await reader.refresh()
+  await Promise.all([reader.act('pause'), reader.act('pause'), reader.act('withdraw'), reader.act('resume')])
+  assert.deepEqual(h.calls, [{ action: 'pause', args: [active5C.id] }])
+  reader.dispose()
+}
+for (const interruption of ['signout', 'account-change', 'dispose', 'newer-refresh'] as const) {
+  const { h, reader } = harness5C()
+  await reader.refresh()
+  const reached = deferred5B<void>()
+  const release = deferred5B<void>()
+  h.mutate = async () => { reached.resolve(); await release.promise }
+  const action = reader.act('pause')
+  await reached.promise
+  const pendingButtons = renderActions5C(h.state()).match(/<button\b[^>]*>/g) ?? []
+  assert.equal(pendingButtons.length, 2)
+  assert.ok(pendingButtons.every((tag) => tag.includes('disabled=""')))
+  if (interruption === 'signout') h.authEvent('SIGNED_OUT', null)
+  if (interruption === 'account-change') {
+    h.authEvent('SIGNED_IN', uuid5A(555))
+    await reader.refresh()
+    assert.equal(h.state().status, 'empty')
+    await reader.act('enroll') // Old account's outstanding RPC still owns the lock.
+    assert.equal(h.calls.length, 1)
+  }
+  if (interruption === 'dispose') reader.dispose()
+  if (interruption === 'newer-refresh') {
+    h.rows = [{ ...active5C, state: 'paused' }]
+    await reader.refresh()
+    assert.equal(loaded5C(h).enrollment.state, 'paused')
+  }
+  const publications = h.states.length
+  release.resolve()
+  await action
+  if (interruption === 'signout') assert.equal(h.state().status, 'signed-out')
+  if (interruption === 'account-change') {
+    assert.equal(h.state().status, 'empty')
+    assert.equal(h.state().mutation, undefined)
+  }
+  if (interruption === 'dispose') assert.equal(h.states.length, publications)
+  if (interruption === 'newer-refresh') {
+    assert.equal(loaded5C(h).enrollment.state, 'paused')
+    assert.equal(h.state().mutation, undefined)
+  }
+  assert.equal(h.calls.length, 1)
+  reader.dispose()
+}
+// Confirmation never carries over to a new read/account; preflight cannot retarget an intent.
+for (const change of ['refresh-confirmation', 'silent-account-change', 'different-enrollment'] as const) {
+  const { h, reader } = harness5C()
+  await reader.refresh()
+  if (change === 'refresh-confirmation') {
+    await reader.act('withdraw')
+    await reader.refresh()
+    await reader.confirmWithdrawal()
+  } else {
+    if (change === 'silent-account-change') h.setOwner(uuid5A(555))
+    else h.rows = [{ ...active5C, id: uuid5A(556) }]
+    await reader.act('pause')
+  }
+  assert.equal(h.calls.length, 0)
+  reader.dispose()
+}
+const entry5C = readFileSync(new URL('../src/components/StudyPathVersion.astro', import.meta.url), 'utf8')
+assert.ok(entry5C.includes('href={`/student/study-paths/${path.slug}/`}'))
+assert.match(entry5C, /التسجيل أو عرض مسارك/)
+assert.doesNotMatch(entry5C, /supabase|student-study-path-cloud|client:load/)
+// Same-account token refresh/focus sign-in must not discard an uncertain operation.
+for (const event of ['TOKEN_REFRESHED', 'SIGNED_IN']) {
+  const { h, reader } = harness5C()
+  await reader.refresh()
+  const reached = deferred5B<void>()
+  const release = deferred5B<void>()
+  h.mutate = async () => { reached.resolve(); await release.promise; throw new Error('response lost') }
+  const action = reader.act('pause')
+  await reached.promise
+  h.authEvent(event)
+  await reader.refresh()
+  assert.equal(h.state().mutation?.status, 'pending')
+  release.resolve()
+  await action
+  assert.equal(loaded5C(h).enrollment.state, 'active')
+  assert.equal(h.state().mutation?.status, 'error')
+  assert.equal(h.calls.length, 1)
+  reader.dispose()
+}
+{
+  const { h, reader } = harness5C()
+  h.progress = lessonKeys5A.map((key) => progress5A(key, true))
+  await reader.refresh()
+  assert.equal(loaded5C(h).study.completed, true)
+  assert.equal(loaded5C(h).enrollment.state, 'active')
+  assert.equal(h.calls.length, 0)
+  reader.dispose()
 }
 console.log('selfcheck ok')

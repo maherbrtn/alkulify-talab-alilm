@@ -35,6 +35,12 @@ const lessonCount = version.modules.reduce((total, module) => total + module.les
   <p class="mt-3 text-sm text-muted">
     <span set:html={withDigits(`الإصدار ${version.version} · ${lessons(lessonCount)}`)} />
   </p>
+  <a
+    href={`/student/study-paths/${path.slug}/`}
+    class="mt-5 inline-flex min-h-11 items-center rounded-xl border border-border-strong px-5 font-medium transition-colors hover:bg-surface-2"
+  >
+    التسجيل أو عرض مسارك
+  </a>
 </header>
 
 {
