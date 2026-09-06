@@ -2691,4 +2691,221 @@ for (const filename of ['student-study-path.ts', 'student-study-path-cloud.ts'])
   assert.doesNotMatch(source, /localStorage|sessionStorage|merge_lesson_progress['"]\s*,|youtube|telegram|providerId|corpusId/i)
 }
 assert.deepEqual(publicStudyPaths, [])
+
+// Slice 5B: private route props, read-only rendering and auth/read race boundaries.
+const { observeStudentStudyPath, studentStudyPathPageProps, StudentStudyPathView } =
+  await import('../src/islands/StudentStudyPath.tsx')
+const { createElement } = await import('react')
+const { renderToStaticMarkup } = await import('react-dom/server')
+type State5B = import('../src/islands/StudentStudyPath.tsx').StudentStudyPathState
+type Auth5B = Parameters<typeof observeStudentStudyPath>[1]
+const page5B = studentStudyPathPageProps(publicFixturePath)
+assert.deepEqual(page5B.path.versions.map((v) => v.version), publicFixturePath.versions.map((v) => v.version))
+assert.deepEqual(validateStudyPathDefinition(page5B.path, (await import('../src/lib/data.ts')).lessonRegistry), page5B.path)
+assert.ok(page5B.metadata.every((item) => Object.keys(item).sort().join(',') === 'href,lessonKey,title'))
+assert.ok(page5B.metadata.every((item) => /^\/v\/[^/]+\/$/.test(item.href)))
+assert.doesNotMatch(JSON.stringify(page5B.path), /youtube|telegram|corpus|provider|"href"/i)
+assert.throws(() => studentStudyPathPageProps({ ...publicFixturePath, status: 'draft' }), /published/)
+assert.throws(() => studentStudyPathPageProps({ ...publicFixturePath, status: 'retired' }), /published/)
+const shell5B = readFileSync(new URL('../src/pages/student/study-paths/[slug].astro', import.meta.url), 'utf8')
+assert.match(shell5B, /publicStudyPaths\.map/)
+assert.match(shell5B, /studentStudyPathPageProps\(path\)/)
+assert.match(shell5B, /noindex/)
+assert.match(shell5B, /client:load/)
+assert.doesNotMatch(shell5B, /supabase|process\.env|import\.meta\.env|prerender\s*=\s*false/)
+const source5B = readFileSync(new URL('../src/islands/StudentStudyPath.tsx', import.meta.url), 'utf8')
+for (const event of ['pageshow', 'focus']) {
+  assert.ok(source5B.includes(`addEventListener('${event}', refresh)`))
+  assert.ok(source5B.includes(`removeEventListener('${event}', refresh)`))
+}
+assert.doesNotMatch(source5B, /localStorage|sessionStorage|service_role|\.(from|rpc|enroll|pause|resume|withdraw|upgrade)\s*\(/)
+
+const props5B = { path: path5A, metadata: display5A }
+let state5B: State5B = { status: 'authenticating' }
+let sessionUser5B: string | null = active5A.user_id
+let verifiedUser5B: string | null = active5A.user_id
+let authFailure5B = false
+let enrollFailure5B = false
+let progressFailure5B = false
+let enrollRows5B = [active5A]
+let progressRows5B = [progress5A(lessonKeys5A[0], true)]
+const calls5B: string[] = []
+let event5B: (event: string) => void = () => {}
+let unsubscribed5B = false
+const auth5B = {
+  getSession: async () => {
+    calls5B.push('session')
+    if (authFailure5B) throw new Error('offline')
+    return { data: { session: sessionUser5B ? { user: { id: sessionUser5B } } : null }, error: null }
+  },
+  getUser: async () => {
+    calls5B.push('user')
+    return { data: { user: verifiedUser5B ? { id: verifiedUser5B } : null }, error: null }
+  },
+  onAuthStateChange: (callback: typeof event5B) => {
+    event5B = callback
+    return { data: { subscription: { unsubscribe: () => { unsubscribed5B = true } } } }
+  },
+} as unknown as Auth5B
+let readEnrollment5B = async (_pathId: string): Promise<Enrollment5A[]> => enrollRows5B
+let readProgress5B = async (_keys: readonly string[]): Promise<StudentProgressRow[]> => progressRows5B
+const cloud5B = {
+  readEnrollments: async (pathId: string) => {
+    calls5B.push('enrollments')
+    assert.equal(pathId, pathId5A)
+    if (enrollFailure5B) throw new Error('read failed')
+    return readEnrollment5B(pathId)
+  },
+  readProgress: async (keys: readonly string[]) => {
+    calls5B.push('progress')
+    assert.deepEqual(keys, lessonKeys5A.slice(0, 2)) // Pinned v1, never current v2.
+    if (progressFailure5B) throw new Error('partial read failed')
+    return readProgress5B(keys)
+  },
+}
+let onLoaded5B: (() => void) | undefined
+const observer5B = observeStudentStudyPath(props5B, auth5B, (state) => {
+  state5B = state
+  if (state.status === 'loaded') onLoaded5B?.()
+}, cloud5B)
+const loaded5B = () => {
+  assert.equal(state5B.status, 'loaded')
+  return state5B as Extract<State5B, { status: 'loaded' }>
+}
+await observer5B.refresh()
+assert.equal(loaded5B().study.progress.percentage, 50)
+assert.equal(loaded5B().study.version.version, 1)
+assert.equal(loaded5B().study.continueLesson?.lessonKey, lessonKeys5A[1])
+calls5B.length = 0
+await observer5B.refresh()
+assert.deepEqual(calls5B, ['session', 'user', 'enrollments', 'progress'])
+for (const failure of ['session', 'user', 'owner-mismatch', 'enrollment', 'progress', 'multiple-live', 'other-path', 'other-owner', 'missing-version'] as const) {
+  authFailure5B = failure === 'session'
+  verifiedUser5B = failure === 'user' ? null : failure === 'owner-mismatch' ? uuid5A(99) : active5A.user_id
+  enrollFailure5B = failure === 'enrollment'
+  progressFailure5B = failure === 'progress'
+  enrollRows5B = failure === 'multiple-live' ? [active5A, enrollment5A({ id: uuid5A(99), path_version: 2 })]
+    : failure === 'other-path' ? [otherPath5A]
+    : failure === 'other-owner' ? [enrollment5A({ user_id: uuid5A(99) })]
+    : failure === 'missing-version' ? [enrollment5A({ path_version: 99 })] : [active5A]
+  calls5B.length = 0
+  await observer5B.refresh()
+  assert.equal(state5B.status, ['session', 'user', 'owner-mismatch'].includes(failure) ? 'auth-error'
+    : failure === 'enrollment' ? 'enrollment-error' : failure === 'progress' ? 'progress-error'
+    : failure === 'missing-version' ? 'unavailable-version' : 'corrupt-enrollment')
+  if (failure !== 'progress') assert.ok(!calls5B.includes('progress'))
+}
+authFailure5B = enrollFailure5B = progressFailure5B = false
+verifiedUser5B = active5A.user_id
+sessionUser5B = null
+calls5B.length = 0
+await observer5B.refresh()
+assert.equal(state5B.status, 'signed-out')
+assert.deepEqual(calls5B, ['session'])
+sessionUser5B = active5A.user_id
+for (const rows of [[], [history5A]]) {
+  enrollRows5B = rows
+  calls5B.length = 0
+  await observer5B.refresh()
+  assert.equal(state5B.status, 'empty')
+  assert.ok(!calls5B.includes('progress'))
+}
+enrollRows5B = [enrollment5A({ state: 'paused' })]
+await observer5B.refresh()
+assert.equal(loaded5B().study.continueLesson, null)
+assert.equal(loaded5B().study.progress.percentage, 50)
+enrollRows5B = [active5A]
+progressRows5B = []
+await observer5B.refresh()
+assert.equal(loaded5B().study.progress.percentage, 0)
+progressRows5B = lessonKeys5A.slice(0, 2).map((key) => progress5A(key, true))
+await observer5B.refresh()
+assert.equal(loaded5B().study.progress.percentage, 100)
+assert.equal(loaded5B().enrollment.state, 'active')
+assert.equal(loaded5B().study.continueLesson, null)
+
+const deferred5B = <T,>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+// Account changes/sign-out invalidate pending enrollment and progress reads immediately.
+for (const stage of ['enrollment', 'progress'] as const) {
+  const reached = deferred5B<void>()
+  const pendingEnrollment = deferred5B<Enrollment5A[]>()
+  const pendingProgress = deferred5B<StudentProgressRow[]>()
+  readEnrollment5B = stage === 'enrollment' ? async () => { reached.resolve(); return pendingEnrollment.promise } : async () => enrollRows5B
+  readProgress5B = async () => { reached.resolve(); return pendingProgress.promise }
+  const oldRead = observer5B.refresh()
+  await reached.promise
+  event5B('SIGNED_OUT')
+  assert.equal(state5B.status, 'signed-out')
+  pendingEnrollment.resolve([active5A])
+  pendingProgress.resolve(progressRows5B)
+  await oldRead
+  assert.equal(state5B.status, 'signed-out')
+}
+readEnrollment5B = async () => enrollRows5B
+readProgress5B = async () => progressRows5B
+sessionUser5B = verifiedUser5B = uuid5A(99)
+enrollRows5B = [enrollment5A({ user_id: uuid5A(99) })]
+const accountReload5B = deferred5B<void>()
+onLoaded5B = accountReload5B.resolve
+event5B('SIGNED_IN')
+assert.equal(state5B.status, 'authenticating')
+await accountReload5B.promise
+onLoaded5B = undefined
+assert.equal(loaded5B().enrollment.user_id, uuid5A(99))
+progressRows5B = []
+const refreshed5B = observer5B.refresh()
+assert.equal(state5B.status, 'authenticating')
+await refreshed5B
+assert.equal(loaded5B().study.progress.percentage, 0)
+// A newer successful refresh also wins over an older request that completes later.
+const olderReached5B = deferred5B<void>()
+const olderResult5B = deferred5B<StudentProgressRow[]>()
+readProgress5B = async () => { olderReached5B.resolve(); return olderResult5B.promise }
+const olderRead5B = observer5B.refresh()
+await olderReached5B.promise
+readProgress5B = async () => progressRows5B
+await observer5B.refresh()
+const newerState5B = state5B
+olderResult5B.resolve([progress5A(lessonKeys5A[0], true)])
+await olderRead5B
+assert.equal(state5B, newerState5B)
+
+const disposeReached5B = deferred5B<void>()
+const disposeResult5B = deferred5B<StudentProgressRow[]>()
+readProgress5B = async () => { disposeReached5B.resolve(); return disposeResult5B.promise }
+const disposedRead5B = observer5B.refresh()
+await disposeReached5B.promise
+observer5B.dispose()
+const disposedState5B = state5B
+disposeResult5B.resolve(progressRows5B)
+await disposedRead5B
+assert.equal(state5B, disposedState5B)
+assert.ok(unsubscribed5B)
+const finalState5B = state5B
+await observer5B.refresh()
+assert.equal(state5B, finalState5B)
+
+const render5B = (state: State5B) => renderToStaticMarkup(createElement(StudentStudyPathView, {
+  ...props5B, state, retry: () => {},
+}))
+for (const status of ['authenticating', 'signed-out', 'empty', 'auth-error', 'enrollment-error', 'progress-error', 'unavailable-version', 'corrupt-enrollment'] as const) {
+  assert.doesNotMatch(render5B({ status }), /<progress|0%|تابع المسار/)
+}
+for (const state of ['active', 'paused', 'withdrawn', 'superseded'] as const) {
+  const enrollment = enrollment5A({ state })
+  const study = deriveStudentStudyPath(path5A, enrollment, [progress5A(lessonKeys5A[0], true)], display5A)
+  const html = render5B({ status: 'loaded', enrollment, study })
+  assert.match(html, /50%/)
+  assert.match(html, /dir="rtl"/)
+  // The lesson list preserves curriculum order even when Continue duplicates a title above it.
+  assert.ok(html.lastIndexOf('Lesson 0') < html.lastIndexOf('Lesson 1'))
+  assert.match(html, /href="\/lessons\/test-0\/"/)
+  assert.match(html, /غير مكتمل/)
+  if (state === 'active') assert.match(html, /تابع المسار/)
+  else assert.doesNotMatch(html, /تابع المسار/)
+}
 console.log('selfcheck ok')

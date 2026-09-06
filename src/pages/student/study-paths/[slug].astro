@@ -1,0 +1,23 @@
+---
+import Base from '../../../layouts/Base.astro'
+import StudentStudyPath, { studentStudyPathPageProps } from '../../../islands/StudentStudyPath'
+import { publicStudyPaths } from '../../../lib/public-study-paths'
+
+export function getStaticPaths() {
+  return publicStudyPaths.map((path) => ({
+    params: { slug: path.slug },
+    props: studentStudyPathPageProps(path),
+  }))
+}
+const { path, metadata } = Astro.props
+---
+
+<Base title={`${path.title} — مساحة الطالب`} description="مسارك الدراسي وتقدمك الخاص." noindex>
+  <p class="mt-8 text-sm">
+    <a href="/student/" class="text-muted underline underline-offset-4 hover:text-fg">مساحة الطالب</a>
+  </p>
+  <h1 class="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">{path.title}</h1>
+  <p class="mt-3 text-muted">تقدم دروسك بحسب الإصدار المثبت لتسجيلك.</p>
+  <StudentStudyPath path={path} metadata={metadata} client:load />
+  <noscript><p class="card mt-8 p-5">فعّل JavaScript لتسجيل الدخول وعرض تقدمك الخاص.</p></noscript>
+</Base>
