@@ -3579,4 +3579,246 @@ for (const nextAction of ['upgrade', 'pause'] as const) {
   assert.equal(loaded5C(h).enrollment.path_version, 2)
   reader.dispose()
 }
+// Slice 6A: complete owner reads and pure My Paths planning/derivation.
+const { planStudentMyPaths, deriveStudentMyPaths } = await import('../src/lib/student-my-paths.ts')
+type Catalog6A = import('../src/lib/student-my-paths.ts').StudentMyPathsCatalogEntry
+const owner6A = active5A.user_id
+const catalog6A: Catalog6A[] = [{ path: path5A, metadata: display5A }, {
+  path: { ...path5A, pathId: otherPath5A.path_id, slug: 'second-path',
+    versions: [source5A, target5A].map((version) => ({ ...version, pathId: otherPath5A.path_id })) },
+  metadata: display5A,
+}]
+const paused6A = { ...otherPath5A, state: 'paused' as const, paused_at: active5A.updated_at }
+const withdrawn6A = { ...history5A, withdrawn_at: active5A.updated_at }
+const superseded6A = enrollment5A({ id: uuid5A(8), path_version: 3, state: 'superseded',
+  superseded_at: active5A.updated_at, superseded_by_enrollment_id: uuid5A(9) })
+const ownerRows6A = [active5A, paused6A, withdrawn6A, superseded6A]
+
+// Exercise the real query serializer against a bounded, deterministic local transport.
+function ownerReader6A(pages: readonly { data?: unknown; status?: number; throws?: boolean }[]) {
+  const requests: URL[] = []
+  const client = createStudyPathTestClient<Database5A>('https://owner-read.invalid', 'test-key', {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { fetch: async (input, init) => {
+      const url = new URL(String(input))
+      assert.equal(init?.method ?? 'GET', 'GET')
+      assert.ok(url.pathname.endsWith('/study_path_enrollments'))
+      requests.push(url)
+      const page = pages[requests.length - 1]
+      if (!page || page.throws) throw new TypeError('owner page unavailable')
+      return new Response(JSON.stringify(page.data), {
+        status: page.status ?? 200, headers: { 'Content-Type': 'application/json' },
+      })
+    } },
+  })
+  return { requests, cloud: createStudentStudyPathCloud(() => client) }
+}
+{
+  const h = ownerReader6A([{ data: [] }])
+  assert.deepEqual(await h.cloud.readOwnerEnrollments(), [])
+  assert.equal(h.requests.length, 1)
+}
+{
+  // Every intermediate page is shorter than the requested limit; all states survive.
+  const h = ownerReader6A([...ownerRows6A.map((row) => ({ data: [row] })), { data: [] }])
+  assert.deepEqual(await h.cloud.readOwnerEnrollments(), ownerRows6A)
+  assert.equal(h.requests.length, ownerRows6A.length + 1)
+  for (const [index, url] of h.requests.entries()) {
+    const params = url.searchParams
+    assert.equal(params.get('order'), 'id.asc')
+    assert.equal(params.get('limit'), '100')
+    assert.equal(params.get('id'), index === 0 ? null : `gt.${ownerRows6A[index - 1].id}`)
+    assert.deepEqual([...params.keys()].sort(), index === 0
+      ? ['limit', 'order', 'select'] : ['id', 'limit', 'order', 'select'])
+    assert.ok(params.get('select')!.includes('user_id,path_id,path_version,state'))
+    assert.equal(params.has('user_id'), false)
+    assert.equal(params.has('path_id'), false)
+    assert.equal(params.has('state'), false)
+  }
+}
+for (const [name, pages, kind] of [
+  ['malformed first container', [{ data: {} }], 'response'],
+  ['null first container', [{ data: null }], 'response'],
+  ['malformed later container', [{ data: [active5A] }, { data: {} }], 'response'],
+  ['malformed later row', [{ data: [active5A] }, { data: [{ ...paused6A, state: 'broken' }] }], 'response'],
+  ['malformed first row', [{ data: [{ ...active5A, updated_at: null }] }], 'response'],
+  ['missing row fields', [{ data: [{ id: active5A.id }] }], 'response'],
+  ['noncanonical cursor identity', [{ data: [{ ...active5A, id: 'invalid' }] }], 'response'],
+  ['duplicate in page', [{ data: [active5A, active5A] }], 'response'],
+  ['nonadvancing later page', [{ data: [active5A] }, { data: [active5A] }], 'response'],
+  ['out of order page', [{ data: [paused6A, active5A] }], 'response'],
+  ['cursor regresses', [{ data: [paused6A] }, { data: [active5A] }], 'response'],
+  ['request failure after partial rows', [{ data: [active5A] }, { data: { message: 'denied' }, status: 403 }], 'request'],
+  ['network failure after partial rows', [{ data: [active5A] }, { throws: true }], 'request'],
+  ['empty page required', [{ data: [active5A] }], 'request'],
+  ['oversized inconsistent page', [{ data: Array.from({ length: 101 }, (_, i) =>
+    enrollment5A({ id: uuid5A(6000 + i) })) }], 'response'],
+] as const) {
+  const h = ownerReader6A(pages)
+  await assert.rejects(h.cloud.readOwnerEnrollments(), (error: unknown) =>
+    error instanceof StudentStudyPathCloudError && error.operation === 'read-owner-enrollments' &&
+    error.kind === kind, name)
+}
+// Even a transport returning data alongside an error must discard the data.
+{
+  const query = {
+    select() { return this }, order() { return this }, limit() { return this },
+    then(resolve: (value: unknown) => unknown) {
+      return Promise.resolve(resolve({ data: [active5A], error: new Error('partial failure') }))
+    },
+  }
+  const cloud = createStudentStudyPathCloud(() => ({ from: () => query }) as unknown as
+    ReturnType<NonNullable<Parameters<typeof createStudentStudyPathCloud>[0]>>)
+  await assert.rejects(cloud.readOwnerEnrollments(), StudentStudyPathCloudError)
+}
+await assert.rejects(throwingService5A.readOwnerEnrollments(), StudentStudyPathCloudError)
+
+// Catalog identity, absence, and preserved historical versions.
+assert.deepEqual(planStudentMyPaths(owner6A, [], []), { live: [], history: [], corrupt: [], lessonKeys: [] })
+for (const catalog of [
+  [catalog6A[0], catalog6A[0]],
+  [catalog6A[0], { ...catalog6A[0], path: { ...path5A, slug: 'different-slug' } }],
+  [catalog6A[0], { ...catalog6A[1], path: { ...catalog6A[1].path, slug: path5A.slug } }],
+]) assert.throws(() => planStudentMyPaths(owner6A, [], catalog), /ambiguous/)
+for (const overrides of [
+  { slug: '../unsafe' }, { slug: 'unsafe?query' }, { title: '' }, { pathId: 'bad' },
+  { status: 'draft' as const }, { versions: [source5A, source5A, target5A] },
+  { versions: [{ ...source5A, publishedAt: null }, target5A] },
+  { currentVersion: 99 }, { versions: [{ ...source5A, pathId: otherPath5A.path_id }, target5A] },
+]) assert.throws(() => planStudentMyPaths(owner6A, [], [{ ...catalog6A[0], path: { ...path5A, ...overrides } }]))
+const missing6A = planStudentMyPaths(owner6A, [active5A, withdrawn6A], [])
+assert.equal(missing6A.live.length, 1) // Empty public catalog never erases real enrollment state.
+assert.deepEqual(missing6A.lessonKeys, [])
+for (const info of [missing6A.live[0].info, missing6A.history[0]]) {
+  assert.equal(info.availability, 'unavailable-path')
+  assert.equal(info.href, null)
+  assert.equal(info.title, null)
+  assert.equal(info.slug, null)
+  assert.equal('user_id' in info, false)
+}
+const missingVersion6A = planStudentMyPaths(owner6A, [active5A], [{ ...catalog6A[0],
+  path: { ...path5A, versions: [target5A] } }])
+assert.equal(missingVersion6A.live[0].info.availability, 'unavailable-version')
+assert.equal(missingVersion6A.live[0].info.title, path5A.title)
+assert.equal(missingVersion6A.live[0].info.pinnedVersion, 1)
+assert.equal(missingVersion6A.live[0].curriculum, null)
+assert.deepEqual(missingVersion6A.lessonKeys, [])
+const buildPropsPlan6A = planStudentMyPaths(owner6A,
+  [enrollment5A({ path_id: page5B.path.pathId })], [page5B])
+assert.equal(buildPropsPlan6A.live[0].info.availability, 'available')
+assert.equal(buildPropsPlan6A.live[0].curriculum?.path.versions.length, page5B.path.versions.length)
+
+// Multiple live paths are independent; corruption is isolated at the path boundary.
+const plan6A = planStudentMyPaths(owner6A, ownerRows6A, catalog6A)
+assert.equal(plan6A.live.length, 2)
+assert.equal(plan6A.history.length, 2)
+assert.deepEqual(plan6A.corrupt, [])
+assert.deepEqual(planStudentMyPaths(owner6A, [...ownerRows6A].reverse(), [...catalog6A].reverse()), plan6A)
+assert.equal(plan6A.history[0].pinnedVersion, 3)
+assert.equal(plan6A.history[1].pinnedVersion, 2)
+assert.equal(plan6A.history[0].availability, 'unavailable-version')
+assert.equal(plan6A.history[1].availability, 'available')
+for (const badGroup of [
+  [active5A, enrollment5A({ id: uuid5A(90), path_version: 2, state: 'paused' })],
+  [active5A, enrollment5A({ id: uuid5A(90), path_version: 2 })],
+  [active5A, active5A],
+  [active5A, enrollment5A({ id: uuid5A(90), state: 'withdrawn' })],
+  [enrollment5A({ path_version: 0 })],
+  [enrollment5A({ id: 'bad' })],
+  [enrollment5A({ state: 'invalid' as Enrollment5A['state'] })],
+]) {
+  const plan = planStudentMyPaths(owner6A, [...badGroup, paused6A], catalog6A)
+  assert.deepEqual(plan.corrupt, [{ pathId: pathId5A, status: 'corrupt-enrollment' }])
+  assert.equal(plan.live.length, 1)
+  assert.equal(plan.live[0].info.pathId, paused6A.path_id)
+  assert.deepEqual(plan.history, [])
+}
+assert.equal(planStudentMyPaths(owner6A, [active5A, { ...paused6A, id: active5A.id }], catalog6A).corrupt.length, 2)
+for (const rows of [
+  [active5A, { ...paused6A, user_id: uuid5A(999) }],
+  [active5A, enrollment5A({ id: uuid5A(90), user_id: uuid5A(999) })],
+  [{ ...active5A, user_id: uuid5A(999) }],
+]) assert.throws(() => planStudentMyPaths(owner6A, rows, []), /owner mismatch/)
+
+// Keys are the sorted union of LIVE PINNED curricula, including paused, excluding history.
+assert.deepEqual(plan6A.lessonKeys, lessonKeys5A.slice(0, 2))
+const distinctPaused6A = planStudentMyPaths(owner6A, [active5A, { ...paused6A, path_version: 2 }], catalog6A)
+assert.deepEqual(distinctPaused6A.lessonKeys, [...lessonKeys5A].sort())
+assert.deepEqual(planStudentMyPaths(owner6A, [withdrawn6A, superseded6A], catalog6A).lessonKeys, [])
+assert.deepEqual(planStudentMyPaths(owner6A, [active5A, withdrawn6A], catalog6A).lessonKeys, lessonKeys5A.slice(0, 2))
+const large6A = planStudentMyPaths(owner6A, [active5A], [{ metadata: [], path: {
+  ...path5A, currentVersion: 1, versions: [version5A(1, [...cloudKeys5A].reverse())],
+} }])
+assert.deepEqual(large6A.lessonKeys, cloudKeys5A)
+requests5A.length = 0
+assert.deepEqual(await service5A.readProgress(large6A.lessonKeys), cloudRows5A)
+assert.equal(new Set(requests5A.map(({ url }) => url.searchParams.get('lesson_key'))).size, 3)
+assert.ok(requests5A.every(({ url }) => url.searchParams.get('lesson_key')!.slice(4, -1).split(',').length <= 100))
+
+// Existing completion/percentage/Continue rules, with a single complete shared response.
+const sharedProgress6A = [progress5A(lessonKeys5A[0], true), progress5A(lessonKeys5A[1], false, 45)]
+const cards6A = deriveStudentMyPaths(plan6A, { status: 'complete', rows: sharedProgress6A })
+assert.equal(cards6A.live.length, 2)
+for (const card of cards6A.live) {
+  assert.equal(card.status, 'ready')
+  assert.deepEqual(card.progress, { completedLessons: 1, totalLessons: 2, percentage: 50, completed: false })
+  assert.equal(card.pinnedVersion, 1) // Current version is 2 with different membership.
+  assert.doesNotMatch(card.href!, /enrollment=/)
+  assert.equal(card.href, `/student/study-paths/${card.slug}/`)
+  assert.equal('curriculum' in card, false)
+  assert.equal('user_id' in card, false)
+}
+assert.equal(cards6A.live[0].continueLesson?.lessonKey, lessonKeys5A[1])
+assert.equal(cards6A.live[0].continueLesson?.href, `${display5A[1].href}?t=45`)
+assert.equal(cards6A.live[1].state, 'paused')
+assert.equal(cards6A.live[1].continueLesson, null)
+for (const entry of cards6A.history) {
+  assert.equal(entry.readOnly, true)
+  assert.equal(entry.href, `/student/study-paths/${entry.slug}/?enrollment=${entry.enrollmentId}`)
+  assert.equal('progress' in entry, false)
+  assert.equal('continueLesson' in entry, false)
+}
+const complete6A = deriveStudentMyPaths(plan6A, { status: 'complete', rows: lessonKeys5A.map((key) => progress5A(key, true)) })
+assert.equal(complete6A.live[0].state, 'active')
+assert.equal(complete6A.live[0].progress?.completed, true)
+assert.equal(complete6A.live[0].progress?.percentage, 100)
+assert.equal(complete6A.live[0].continueLesson, null)
+const absentProgress6A = deriveStudentMyPaths(plan6A, { status: 'complete', rows: [] })
+assert.equal(absentProgress6A.live[0].progress?.percentage, 0)
+assert.equal(absentProgress6A.live[0].continueLesson?.lessonKey, lessonKeys5A[0])
+assert.equal(absentProgress6A.live[1].continueLesson, null)
+const failedProgress6A = deriveStudentMyPaths(plan6A, { status: 'error' })
+assert.ok(failedProgress6A.live.every((card) => card.status === 'progress-error' && card.progress === null && card.continueLesson === null))
+for (const unavailable of [missing6A, missingVersion6A]) {
+  const result = deriveStudentMyPaths(unavailable, { status: 'complete', rows: sharedProgress6A })
+  assert.equal(result.live[0].status, 'unavailable')
+  assert.equal(result.live[0].progress, null)
+  assert.equal(result.live[0].continueLesson, null)
+}
+for (const metadata of [[], [...display5A, display5A[0]],
+  [{ ...display5A[0], href: 'https://outside.invalid/' }],
+  [{ ...display5A[0], href: '//outside.invalid/' }],
+  [{ ...display5A[0], href: '/lesson/?unsafe=1' }],
+]) {
+  const plan = planStudentMyPaths(owner6A, [active5A], [{ ...catalog6A[0], metadata }])
+  const card = deriveStudentMyPaths(plan, { status: 'complete', rows: [] }).live[0]
+  assert.equal(card.status, 'derivation-error')
+  assert.equal(card.progress, null)
+  assert.equal(card.continueLesson, null)
+}
+assert.ok(deriveStudentMyPaths(plan6A, { status: 'complete', rows: [sharedProgress6A[0], sharedProgress6A[0]] })
+  .live.every((card) => card.status === 'derivation-error'))
+// Planning/derivation do not mutate the caller's progress order or enrollment/catalog inputs.
+assert.deepEqual(sharedProgress6A, [progress5A(lessonKeys5A[0], true), progress5A(lessonKeys5A[1], false, 45)])
+assert.deepEqual(planStudentMyPaths(owner6A, ownerRows6A, catalog6A), plan6A)
+
+// Boundary guards supplement the unchanged general Continue/Recent behavior checks above.
+const myPathsSource6A = readFileSync(new URL('../src/lib/student-my-paths.ts', import.meta.url), 'utf8')
+assert.doesNotMatch(myPathsSource6A, /\.(from|rpc|insert|update|delete|upsert)\s*\(|fetch\s*\(/)
+assert.doesNotMatch(myPathsSource6A, /localStorage|sessionStorage|youtube|telegram|providerId|corpusId|service_role/i)
+assert.doesNotMatch(myPathsSource6A, /student-progress-cloud|student-home-controller|StudentHome|deriveStudentProgress|readStudentProgress|from ['"]react/)
+assert.doesNotMatch(myPathsSource6A, /studyPathEnrollmentActions|studyPathUpgrade|merge_lesson_progress/)
+assert.match(myPathsSource6A, /partitionStudyPathEnrollments\(group, pathId\)/)
+assert.match(myPathsSource6A, /deriveStudentStudyPath\(/)
+assert.deepEqual(publicStudyPaths, [])
 console.log('selfcheck ok')

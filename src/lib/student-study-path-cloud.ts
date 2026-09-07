@@ -148,6 +148,34 @@ export function createStudentStudyPathCloud(getClient: () => Client = supabase) 
     return rows[0] ?? null
   }
 
+  /** RLS supplies the owner. Exhaustion requires an empty page, even after a short page. */
+  async function readOwnerEnrollments(): Promise<StudyPathEnrollmentRow[]> {
+    const rows: StudyPathEnrollmentRow[] = []
+    let cursor: string | undefined
+
+    for (;;) {
+      const rawPage = await request('read-owner-enrollments', () => {
+        let query = getClient().from('study_path_enrollments').select(ENROLLMENT_COLUMNS)
+          .order('id', { ascending: true }).limit(PAGE_SIZE)
+        if (cursor) query = query.gt('id', cursor)
+        return query
+      })
+      const page = enrollmentRows('read-owner-enrollments', rawPage)
+      if (!page.length) return rows
+      if (page.length > PAGE_SIZE)
+        throw new StudentStudyPathCloudError('read-owner-enrollments', 'response')
+
+      for (const row of page) {
+        // Canonical IDs make lexical comparison agree with the database UUID order.
+        // Strict advancement rejects duplicates both within and across pages.
+        if (!isUuidV4(row.id) || (cursor !== undefined && row.id <= cursor))
+          throw new StudentStudyPathCloudError('read-owner-enrollments', 'response')
+        rows.push(row)
+        cursor = row.id
+      }
+    }
+  }
+
   async function readProgress(lessonKeys: readonly string[]): Promise<StudentProgressRow[]> {
     const keys = [...new Set(lessonKeys)].sort()
 
@@ -194,6 +222,7 @@ export function createStudentStudyPathCloud(getClient: () => Client = supabase) 
 
   return {
     readEnrollments,
+    readOwnerEnrollments,
     readEnrollment,
     readProgress,
 
