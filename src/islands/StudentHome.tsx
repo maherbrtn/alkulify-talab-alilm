@@ -1,108 +1,56 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchStudentLessonCatalog } from '../lib/student-lesson-catalog'
-import {
-  deriveStudentProgress,
-  type StudentProgressRow,
-  type StudentProgressViewModel,
-} from '../lib/student-progress'
-import { readStudentProgress } from '../lib/student-progress-cloud'
+import { observeStudentHome, type StudentHomeState } from '../lib/student-home-controller'
+import type { StudentMyPathsCatalogEntry } from '../lib/student-my-paths'
 import { supabase } from '../lib/supabase'
+import StudentMyPaths from './StudentMyPaths'
 
-type Account = { id: string; email: string }
+type Props = { myPathsCatalog: readonly StudentMyPathsCatalogEntry[] }
 
-type StudentAreaState =
-  | { status: 'authenticating' }
-  | { status: 'progress-loading' }
-  | { status: 'empty' }
-  | { status: 'progress-error' }
-  | { status: 'catalog-loading' }
-  | { status: 'catalog-error' }
-  | { status: 'loaded'; studentProgress: StudentProgressViewModel }
-
-export default function StudentHome() {
-  const [account, setAccount] = useState<Account | null>(null)
-  const [areaState, setAreaState] = useState<StudentAreaState>({ status: 'authenticating' })
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const loadRequest = useRef(0)
-
-  const loadStudentArea = async () => {
-    const request = ++loadRequest.current
-    setAreaState({ status: 'progress-loading' })
-
-    let rows: StudentProgressRow[]
-    try {
-      rows = await readStudentProgress()
-    } catch {
-      if (request === loadRequest.current) setAreaState({ status: 'progress-error' })
-      return
-    }
-    if (request !== loadRequest.current) return
-    if (rows.length === 0) {
-      setAreaState({ status: 'empty' })
-      return
-    }
-
-    setAreaState({ status: 'catalog-loading' })
-    try {
-      const metadata = await fetchStudentLessonCatalog()
-      if (request !== loadRequest.current) return
-      setAreaState({
-        status: 'loaded',
-        studentProgress: deriveStudentProgress(rows, metadata),
-      })
-    } catch {
-      if (request === loadRequest.current) setAreaState({ status: 'catalog-error' })
-    }
-  }
-
+export default function StudentHome({ myPathsCatalog }: Props) {
+  const [state, setState] = useState<StudentHomeState>({ status: 'authenticating' })
+  const controller = useRef<ReturnType<typeof observeStudentHome> | null>(null)
   useEffect(() => {
-    let active = true
-    const client = supabase()
-
-    client.auth.getSession().then(async ({ data }) => {
-      if (!active) return
-      if (!data.session) return location.replace('/student/login/')
-      const { data: verified, error: authError } = await client.auth.getUser()
-      if (!active) return
-      if (authError || !verified.user) {
-        await client.auth.signOut({ scope: 'local' })
-        location.replace('/student/login/')
-        return
-      }
-      setAccount({ id: verified.user.id, email: verified.user.email ?? '' })
-      await loadStudentArea()
+    const reader = observeStudentHome(myPathsCatalog, supabase().auth, (next) => {
+      setState(next)
+      if (next.status === 'signed-out') location.replace('/student/login/')
     })
-
-    const { data: listener } = client.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_OUT') {
-        loadRequest.current++
-        location.replace('/student/login/')
-      }
-    })
+    controller.current = reader
     return () => {
-      active = false
-      loadRequest.current++
-      listener.subscription.unsubscribe()
+      controller.current = null
+      reader.dispose()
     }
-  }, [])
+  }, [myPathsCatalog])
+  return <StudentHomeView state={state} hasPublishedPaths={myPathsCatalog.length > 0}
+    retryAuth={() => { void controller.current?.refresh() }}
+    retryGeneral={() => { void controller.current?.retryGeneral() }}
+    retryMyPaths={() => { void controller.current?.retryMyPaths() }}
+    logout={() => { void controller.current?.signOut() }} />
+}
 
-  const logout = async () => {
-    setBusy(true)
-    const { error: authError } = await supabase().auth.signOut()
-    if (authError) {
-      setError('تعذّر تسجيل الخروج. حاول مجددًا.')
-      setBusy(false)
-    } else {
-      location.replace('/student/login/')
-    }
-  }
+export function StudentHomeView({ state, hasPublishedPaths, retryAuth, retryGeneral, retryMyPaths, logout }: {
+  state: StudentHomeState
+  hasPublishedPaths: boolean
+  retryAuth: () => void
+  retryGeneral: () => void
+  retryMyPaths: () => void
+  logout: () => void
+}) {
+  if (state.status === 'auth-error') return (
+    <div className="card mt-8 p-5" role="alert">
+      <p className="text-red-700 dark:text-red-300">تعذّر التحقق من حسابك. حاول مجددًا أو سجّل الدخول.</p>
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button type="button" onClick={retryAuth} className="inline-flex min-h-11 items-center rounded-xl border border-border-strong px-5">إعادة المحاولة</button>
+        <a href="/student/login/" className="inline-flex min-h-11 items-center rounded-xl border border-border-strong px-5">تسجيل الدخول</a>
+      </div>
+    </div>
+  )
+  if (state.status === 'signed-out') return (
+    <p className="mt-8 text-muted" role="status"><a href="/student/login/">تسجيل الدخول</a></p>
+  )
+  if (state.status !== 'ready') return <p className="mt-8 text-muted" role="status">جارٍ فتح حسابك…</p>
 
-  if (error && !account)
-    return <p className="card mt-8 p-5 text-red-700 dark:text-red-300" role="alert">{error}</p>
-  if (!account) return <p className="mt-8 text-muted" role="status">جارٍ فتح حسابك…</p>
-
-  const retry = () => void loadStudentArea()
+  const { account, general: areaState, signingOut: busy } = state
+  const error = state.signOutError ? 'تعذّر تسجيل الخروج. حاول مجددًا.' : ''
   const studentProgress = areaState.status === 'loaded' ? areaState.studentProgress : null
 
   return (
@@ -148,7 +96,7 @@ export default function StudentHome() {
           </p>
           <button
             type="button"
-            onClick={retry}
+            onClick={retryGeneral}
             className="mt-4 inline-flex min-h-11 items-center rounded-xl border border-border-strong px-5 font-medium transition-colors hover:bg-surface-2"
           >
             إعادة المحاولة
@@ -200,6 +148,7 @@ export default function StudentHome() {
           </ul>
         </section>
       )}
+      <StudentMyPaths state={state.myPaths} hasPublishedPaths={hasPublishedPaths} retry={retryMyPaths} />
     </div>
   )
 }

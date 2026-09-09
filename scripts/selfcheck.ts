@@ -1491,45 +1491,18 @@ assert.doesNotMatch(
   /supabase|service_role|auth|session|localStorage|https?:\/\/|react|astro|player|node:|\.from\(|\.rpc\s*\(/i,
 )
 
-// StudentHome verifies the persisted account before entering one retryable data pipeline. The
-// empty cloud result returns before the catalog boundary, and rendering consumes only derived
-// view-model links rather than rebuilding progress or resume behavior in the island.
-const studentHomeSource = readFileSync(
-  new URL('../src/islands/StudentHome.tsx', import.meta.url),
-  'utf8',
-)
-assert.match(studentHomeSource, /import \{ readStudentProgress \} from '\.\.\/lib\/student-progress-cloud'/)
-assert.match(studentHomeSource, /import \{ fetchStudentLessonCatalog \} from '\.\.\/lib\/student-lesson-catalog'/)
-assert.match(
-  studentHomeSource,
-  /import \{\s+deriveStudentProgress,\s+type StudentProgressRow,\s+type StudentProgressViewModel,\s+\} from '\.\.\/lib\/student-progress'/,
-)
-assert.match(
-  studentHomeSource,
-  /client\.auth\.getSession\(\)[\s\S]*client\.auth\.getUser\(\)[\s\S]*if \(authError \|\| !verified\.user\)[\s\S]*await loadStudentArea\(\)/,
-)
-assert.match(
-  studentHomeSource,
-  /if \(event === 'SIGNED_OUT'\) \{\s+loadRequest\.current\+\+\s+location\.replace\('\/student\/login\/'\)/,
-)
-assert.match(
-  studentHomeSource,
-  /rows = await readStudentProgress\(\)[\s\S]*if \(rows\.length === 0\) \{[\s\S]*setAreaState\(\{ status: 'empty' \}\)[\s\S]*return[\s\S]*\}[\s\S]*await fetchStudentLessonCatalog\(\)/,
-)
-assert.match(studentHomeSource, /studentProgress: deriveStudentProgress\(rows, metadata\)/)
+// General rendering continues to consume the original derived links and metadata rules.
+// Auth/read coordination is exercised through the dashboard controller below.
+const studentHomeSource = readFileSync(new URL('../src/islands/StudentHome.tsx', import.meta.url), 'utf8')
 assert.match(studentHomeSource, /href=\{studentProgress\.continueLesson\.href\}/)
 assert.match(studentHomeSource, /href=\{lesson\.href\}/)
-assert.doesNotMatch(studentHomeSource, /localStorage/)
-assert.doesNotMatch(studentHomeSource, /\.from\s*\(/)
+assert.doesNotMatch(studentHomeSource, /localStorage|sessionStorage|\.from\s*\(/)
 assert.doesNotMatch(studentHomeSource, /fetch\s*\(|['"]\/student\/lesson-catalog\.json/)
 assert.doesNotMatch(studentHomeSource, /\?t=|['"]\/v\//)
-assert.doesNotMatch(studentHomeSource, /playlists?|courses?|study paths?|totalProgress|overallProgress|مسار|دورة/i)
+assert.doesNotMatch(studentHomeSource, /playlists?|courses?|totalProgress|overallProgress|دورة/i)
 assert.match(studentHomeSource, /href="\/student\/profile\/"/)
-assert.match(studentHomeSource, /\.auth\.signOut\(\)/)
-assert.equal(
-  studentHomeSource.match(/بعض سجلات التقدم مرتبطة بدروس لم تعد متاحة حاليًا\./g)?.length,
-  1,
-)
+assert.match(studentHomeSource, /controller\.current\?\.signOut\(\)/)
+assert.equal(studentHomeSource.match(/بعض سجلات التقدم مرتبطة بدروس لم تعد متاحة حاليًا\./g)?.length, 1)
 
 // Student account pages stay static shells. The migration mirrors the already-hosted table,
 // and must never drift into a second competing profile model.
@@ -3820,5 +3793,543 @@ assert.doesNotMatch(myPathsSource6A, /student-progress-cloud|student-home-contro
 assert.doesNotMatch(myPathsSource6A, /studyPathEnrollmentActions|studyPathUpgrade|merge_lesson_progress/)
 assert.match(myPathsSource6A, /partitionStudyPathEnrollments\(group, pathId\)/)
 assert.match(myPathsSource6A, /deriveStudentStudyPath\(/)
+assert.deepEqual(publicStudyPaths, [])
+// Slice 6B: independent dashboard branches, verified auth, and presentational rendering.
+const { observeStudentHome } = await import('../src/lib/student-home-controller.ts')
+const { StudentHomeView } = await import('../src/islands/StudentHome.tsx')
+const { default: StudentMyPaths } = await import('../src/islands/StudentMyPaths.tsx')
+type State6B = import('../src/lib/student-home-controller.ts').StudentHomeState
+type Ready6B = Extract<State6B, { status: 'ready' }>
+type PathsState6B = import('../src/lib/student-home-controller.ts').StudentHomeMyPathsState
+type Auth6B = Parameters<typeof observeStudentHome>[1]
+type Stage6B = 'session' | 'user' | 'general-progress' | 'general-catalog' | 'enrollments' | 'path-progress' | 'sign-out'
+const generalRows6B = [
+  progress5A(uuid5A(8000), false), // Unknown metadata stays stored, excluded only by the existing model.
+  sharedProgress6A[1],
+  ...Array.from({ length: 9 }, (_, i) => progress5A(uuid5A(8100 + i), i % 2 === 0, i + 1)),
+  sharedProgress6A[0],
+]
+const generalMetadata6B: StudentLessonMetadata[] = generalRows6B.slice(1).map((row, i) => ({
+  lessonKey: row.lesson_key, title: `General lesson ${i}`, videoId: `general-${i}`,
+}))
+const expectedGeneral6B = deriveStudentProgress(generalRows6B, generalMetadata6B)
+const renderHome6B = (state: State6B, hasPublishedPaths = true) => renderToStaticMarkup(createElement(StudentHomeView, {
+  state, hasPublishedPaths, retryAuth() {}, retryGeneral() {}, retryMyPaths() {}, logout() {},
+}))
+const renderPaths6B = (state: PathsState6B, hasPublishedPaths = true) => renderToStaticMarkup(createElement(StudentMyPaths, {
+  state, hasPublishedPaths, retry() {},
+}))
+const settled6B = (state: State6B) => state.status === 'ready' &&
+  !['progress-loading', 'catalog-loading'].includes(state.general.status) &&
+  !['enrollment-loading', 'progress-loading'].includes(state.myPaths.status)
+
+function harness6B(catalog: readonly Catalog6A[] = catalog6A) {
+  let state: State6B = { status: 'authenticating' }
+  let callback: (...args: Parameters<Parameters<Auth6B['onAuthStateChange']>[0]>) => void = () => {}
+  const waiters = new Set<() => void>()
+  const pageEvents = new EventTarget()
+  const h = {
+    sessionOwner: owner6A as string | null, userOwner: owner6A as string | null,
+    authErrorAt: null as 'session' | 'user' | null, signOutError: false,
+    enrollments: ownerRows6A, pathProgress: sharedProgress6A,
+    generalRows: generalRows6B, metadata: generalMetadata6B,
+    failures: new Set<Stage6B>(), calls: [] as Stage6B[], states: [] as State6B[],
+    keyReads: [] as (readonly string[])[], unsubscribed: false, inAuthCallback: false,
+    before: async (_stage: Stage6B) => {},
+    state: () => state,
+    event(event: Parameters<typeof callback>[0], owner?: string | null): void {
+      const identity = owner === undefined ? h.sessionOwner : owner
+      h.inAuthCallback = true
+      try { callback(event, identity ? { user: { id: identity } } as Parameters<typeof callback>[1] : null) }
+      finally { h.inAuthCallback = false }
+    },
+    until(predicate: (state: State6B) => boolean): Promise<void> {
+      if (predicate(state)) return Promise.resolve()
+      return new Promise<void>((resolve, reject) => {
+        const check = () => {
+          if (!predicate(state)) return
+          clearTimeout(timeout)
+          waiters.delete(check)
+          resolve()
+        }
+        const timeout = setTimeout(() => { waiters.delete(check); reject(new Error('dashboard state timed out')) }, 2000)
+        waiters.add(check)
+      })
+    },
+    switchAccount(): void {
+      h.sessionOwner = h.userOwner = uuid5A(9000)
+      h.enrollments = []
+      h.pathProgress = []
+      h.generalRows = []
+      h.event('SIGNED_IN')
+    },
+  }
+  const read = async <T,>(stage: Stage6B, value: T) => {
+    if (stage === 'session' || stage === 'user') assert.equal(h.inAuthCallback, false)
+    h.calls.push(stage)
+    const fail = h.failures.has(stage)
+    await h.before(stage)
+    if (fail) throw new Error(`private ${stage} failure`)
+    return value
+  }
+  const auth = {
+    getSession: () => read('session', { data: { session: h.sessionOwner ? { user: { id: h.sessionOwner } } : null },
+      error: h.authErrorAt === 'session' ? new Error('session error') : null }),
+    getUser: () => read('user', { data: { user: h.userOwner ? { id: h.userOwner, email: `${h.userOwner}@example.test` } : null },
+      error: h.authErrorAt === 'user' ? new Error('verification error') : null }),
+    signOut: () => read('sign-out', { error: h.signOutError ? new Error('sign-out error') : null }),
+    onAuthStateChange: (fn: typeof callback) => {
+      callback = fn
+      return { data: { subscription: { unsubscribe() { h.unsubscribed = true } } } }
+    },
+  } as unknown as Auth6B
+  const reader = observeStudentHome(catalog, auth, (next) => {
+    state = next
+    h.states.push(next)
+    for (const waiter of waiters) waiter()
+  }, {
+    readGeneralProgress: () => read('general-progress', h.generalRows),
+    readGeneralCatalog: () => read('general-catalog', h.metadata),
+    readOwnerEnrollments: () => read('enrollments', h.enrollments),
+    readProgress: (keys) => { h.keyReads.push([...keys]); return read('path-progress', h.pathProgress) },
+  }, pageEvents)
+  return { h, reader, pageEvents }
+}
+const ready6B = (h: ReturnType<typeof harness6B>['h']): Ready6B => {
+  const state = h.state()
+  assert.equal(state.status, 'ready')
+  return state as Ready6B
+}
+const paths6B = (state: PathsState6B) => {
+  assert.ok('paths' in state)
+  return state.paths
+}
+
+// Verified matching identity precedes both branches; one union read serves all live cards.
+{
+  const { h, reader } = harness6B()
+  await reader.refresh()
+  h.calls.length = h.keyReads.length = 0
+  await reader.refresh()
+  assert.deepEqual(h.calls.slice(0, 2), ['session', 'user'])
+  assert.equal(h.calls.filter((call) => call === 'enrollments').length, 1)
+  assert.deepEqual(h.keyReads, [plan6A.lessonKeys])
+  assert.equal(ready6B(h).account.id, owner6A)
+  assert.deepEqual(paths6B(ready6B(h).myPaths), cards6A)
+  assert.deepEqual(ready6B(h).general, { status: 'loaded', studentProgress: expectedGeneral6B })
+  const html = renderHome6B(h.state())
+  assert.match(html, /تابع التعلّم/)
+  assert.match(html, /الدروس الأخيرة/)
+  assert.match(html, /مساراتي/)
+  assert.match(html, /href="\/student\/profile\/"/)
+  assert.match(html, /تسجيل الخروج/)
+  reader.dispose()
+}
+for (const failure of ['session', 'user', 'session-error', 'user-error', 'missing-user', 'mismatch', 'missing-session'] as const) {
+  const { h, reader } = harness6B()
+  if (failure === 'session' || failure === 'user') h.failures.add(failure)
+  if (failure === 'session-error') h.authErrorAt = 'session'
+  if (failure === 'user-error') h.authErrorAt = 'user'
+  if (failure === 'missing-user') h.userOwner = null
+  if (failure === 'mismatch') h.userOwner = uuid5A(9001)
+  if (failure === 'missing-session') h.sessionOwner = null
+  await reader.refresh()
+  assert.deepEqual(h.state(), { status: failure === 'missing-session' ? 'signed-out' : 'auth-error' })
+  assert.ok(!h.calls.includes('general-progress') && !h.calls.includes('enrollments'))
+  assert.doesNotMatch(renderHome6B(h.state()), /تابع التعلّم|الدروس الأخيرة|مساراتي|enrollment=/)
+  reader.dispose()
+}
+
+// Every branch failure/empty case remains independent, in both state and rendered HTML.
+for (const scenario of ['both', 'general-error', 'catalog-error', 'paths-error', 'general-empty',
+  'paths-empty', 'empty-catalog', 'progress-error', 'foreign-owner'] as const) {
+  const { h, reader } = harness6B(scenario === 'empty-catalog' ? [] : catalog6A)
+  if (scenario === 'general-error') h.failures.add('general-progress')
+  if (scenario === 'catalog-error') h.failures.add('general-catalog')
+  if (scenario === 'paths-error') h.failures.add('enrollments')
+  if (scenario === 'progress-error') h.failures.add('path-progress')
+  if (scenario === 'general-empty') h.generalRows = []
+  if (scenario === 'paths-empty') h.enrollments = []
+  if (scenario === 'foreign-owner') h.enrollments = [...ownerRows6A, { ...paused6A, user_id: uuid5A(9001) }]
+  await reader.refresh()
+  const state = ready6B(h)
+  const html = renderHome6B(state, scenario !== 'empty-catalog')
+  assert.equal(state.general.status, scenario === 'general-error' ? 'progress-error'
+    : scenario === 'catalog-error' ? 'catalog-error' : scenario === 'general-empty' ? 'empty' : 'loaded')
+  if (state.general.status === 'loaded') {
+    assert.deepEqual(state.general.studentProgress, expectedGeneral6B)
+    assert.match(html, /تابع التعلّم/)
+    assert.match(html, /الدروس الأخيرة/)
+  }
+  assert.ok(h.calls.includes('enrollments'))
+  if (scenario === 'paths-error' || scenario === 'foreign-owner') {
+    assert.deepEqual(state.myPaths, { status: 'enrollment-error' })
+    assert.match(html, /تعذّر تحميل تسجيلاتك/)
+    assert.doesNotMatch(html, /enrollment=|فتح المسار|سجل تسجيلاتي|لم تسجّل/)
+    assert.ok(!h.calls.includes('path-progress'))
+  } else {
+    const paths = paths6B(state.myPaths)
+    assert.equal(paths.live.length, scenario === 'paths-empty' ? 0 : 2)
+    if (scenario === 'empty-catalog') {
+      assert.ok(paths.live.every((card) => card.availability === 'unavailable-path'))
+      assert.equal(paths.history.length, 2)
+      assert.doesNotMatch(html, /لا توجد مسارات منشورة بعد|لم تسجّل|enrollment=|فتح المسار|<progress/)
+      assert.ok(!h.calls.includes('path-progress'))
+    } else if (scenario === 'progress-error') {
+      assert.equal(state.myPaths.status, 'progress-error')
+      assert.ok(paths.live.every((card) => card.progress === null && card.continueLesson === null))
+      assert.doesNotMatch(renderPaths6B(state.myPaths), /0%|<progress|تابع المسار:/)
+      assert.match(html, /فتح المسار/)
+    } else if (scenario !== 'paths-empty') assert.deepEqual(paths, cards6A)
+  }
+  if (scenario === 'general-empty') assert.ok(!h.calls.includes('general-catalog'))
+  reader.dispose()
+}
+
+// One slow branch cannot delay the other. Enrollment presence is published during progress loading.
+for (const stage of ['general-progress', 'enrollments', 'path-progress'] as const) {
+  const { h, reader } = harness6B()
+  const reached = deferred5B<void>(), release = deferred5B<void>()
+  h.before = async (call) => { if (call === stage) { reached.resolve(); await release.promise } }
+  const loading = reader.refresh()
+  await reached.promise
+  await h.until((state) => state.status === 'ready' && (stage === 'general-progress'
+    ? state.myPaths.status === 'ready' : state.general.status === 'loaded'))
+  const state = ready6B(h)
+  if (stage === 'general-progress') assert.equal(state.general.status, 'progress-loading')
+  else if (stage === 'enrollments') assert.deepEqual(state.myPaths, { status: 'enrollment-loading' })
+  else {
+    assert.equal(state.myPaths.status, 'progress-loading')
+    assert.equal(paths6B(state.myPaths).live.length, 2)
+    assert.equal(paths6B(state.myPaths).history.length, 2)
+    const html = renderPaths6B(state.myPaths)
+    assert.match(html, /جارٍ تحميل تقدم مساراتك/)
+    assert.match(html, /فتح المسار/)
+    assert.doesNotMatch(html, /0%|<progress|التقدم غير متاح|تعذّر عرض تقدم/)
+  }
+  release.resolve()
+  await loading
+  reader.dispose()
+}
+
+// Branch-specific retries preserve the sibling's exact successful state and do no sibling reads.
+{
+  const { h, reader } = harness6B()
+  await reader.refresh()
+  const paths = ready6B(h).myPaths
+  h.calls.length = 0
+  h.failures.add('general-progress')
+  await reader.retryGeneral()
+  assert.equal(ready6B(h).myPaths, paths)
+  assert.deepEqual(h.calls, ['general-progress'])
+  h.failures.clear()
+  await reader.retryGeneral()
+  const general = ready6B(h).general
+  h.calls.length = 0
+  h.failures.add('enrollments')
+  await reader.retryMyPaths()
+  assert.equal(ready6B(h).general, general)
+  assert.deepEqual(h.calls, ['enrollments'])
+  h.failures.clear()
+  await reader.retryMyPaths()
+  assert.deepEqual(paths6B(ready6B(h).myPaths), cards6A)
+  reader.dispose()
+}
+
+// Hold every async boundary. Sign-out, account changes and disposal defeat late success AND failure.
+for (const stage of ['session', 'user', 'general-progress', 'general-catalog', 'enrollments', 'path-progress'] as const) {
+  for (const interruption of ['sign-out', 'account-switch', 'dispose'] as const) {
+    for (const fails of [false, true]) {
+      const { h, reader } = harness6B()
+      await reader.refresh()
+      const reached = deferred5B<void>(), release = deferred5B<void>()
+      h.before = async (call) => {
+        if (call === stage) {
+          reached.resolve()
+          await release.promise
+          if (fails) throw new Error('old account failure')
+        }
+      }
+      const old = reader.refresh()
+      await reached.promise
+      if (interruption === 'dispose') reader.dispose()
+      else {
+        h.before = async () => {}
+        if (interruption === 'sign-out') h.event('SIGNED_OUT', null)
+        else h.switchAccount()
+        assert.deepEqual(h.state(), { status: interruption === 'sign-out' ? 'signed-out' : 'authenticating' })
+        const html = renderHome6B(h.state())
+        assert.doesNotMatch(html, /enrollment=|تابع المسار|تابع التعلّم|الدروس الأخيرة|example.test/)
+        if (interruption === 'account-switch') {
+          // Let the deferred auth callback itself initiate and complete the new read.
+          await h.until(settled6B)
+          assert.equal(ready6B(h).account.id, uuid5A(9000))
+          assert.equal(ready6B(h).general.status, 'empty')
+          assert.deepEqual(paths6B(ready6B(h).myPaths), { live: [], history: [], corrupt: [] })
+        }
+      }
+      const state = h.state(), publications = h.states.length
+      release.resolve()
+      await old
+      assert.equal(h.state(), state, `${stage}/${interruption}/${fails}`)
+      assert.equal(h.states.length, publications, `${stage}/${interruption}/${fails}`)
+      reader.dispose()
+      assert.equal(h.unsubscribed, true)
+    }
+  }
+}
+
+// Same-owner events preserve data and in-flight work; callback identity alone never authorizes a new owner.
+for (const event of ['TOKEN_REFRESHED', 'SIGNED_IN'] as const) {
+  const { h, reader } = harness6B()
+  await reader.refresh()
+  const state = h.state(), calls = h.calls.length
+  h.event(event)
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(h.state(), state)
+  assert.equal(h.calls.length, calls)
+  const reached = deferred5B<void>(), release = deferred5B<void>()
+  h.before = async (stage) => { if (stage === 'path-progress') { reached.resolve(); await release.promise } }
+  const pending = reader.retryMyPaths()
+  await reached.promise
+  h.event(event)
+  assert.equal(ready6B(h).general, (state as Ready6B).general)
+  release.resolve()
+  await pending
+  assert.deepEqual(paths6B(ready6B(h).myPaths), cards6A)
+  reader.dispose()
+}
+
+// Real focus/pageshow listeners reverify and refresh both branches, and are removed on disposal.
+for (const event of ['focus', 'pageshow']) {
+  const { h, reader, pageEvents } = harness6B()
+  await reader.refresh()
+  h.calls.length = 0
+  h.enrollments = []
+  h.generalRows = []
+  pageEvents.dispatchEvent(new Event(event))
+  assert.deepEqual(h.state(), { status: 'authenticating' })
+  await h.until(settled6B)
+  assert.deepEqual(h.calls.slice(0, 2), ['session', 'user'])
+  assert.ok(h.calls.includes('enrollments') && h.calls.includes('general-progress'))
+  assert.equal(ready6B(h).general.status, 'empty')
+  assert.equal(paths6B(ready6B(h).myPaths).live.length, 0)
+  reader.dispose()
+  const calls = h.calls.length, publications = h.states.length
+  pageEvents.dispatchEvent(new Event(event))
+  h.event('SIGNED_IN') // Even a transport that delivers after unsubscribe is harmless.
+  await reader.refresh()
+  await reader.retryGeneral()
+  await reader.retryMyPaths()
+  await reader.signOut()
+  assert.equal(h.calls.length, calls)
+  assert.equal(h.states.length, publications)
+}
+
+// Overlapping explicit retries: newest wins within each branch, without canceling the sibling.
+for (const stage of ['general-progress', 'general-catalog', 'enrollments', 'path-progress'] as const) {
+  for (const fails of [false, true]) {
+    const { h, reader } = harness6B()
+    await reader.refresh()
+    const generalBranch = stage.startsWith('general-')
+    const retry = generalBranch ? reader.retryGeneral : reader.retryMyPaths
+    const sibling = generalBranch ? ready6B(h).myPaths : ready6B(h).general
+    const reached = deferred5B<void>(), release = deferred5B<void>()
+    h.before = async (call) => {
+      if (call === stage) { reached.resolve(); await release.promise; if (fails) throw new Error('obsolete retry') }
+    }
+    const old = retry()
+    await reached.promise
+    h.before = async () => {}
+    if (generalBranch) h.generalRows = []
+    else h.enrollments = []
+    await retry()
+    const latest = h.state(), publications = h.states.length
+    assert.equal(generalBranch ? ready6B(h).myPaths : ready6B(h).general, sibling)
+    release.resolve()
+    await old
+    assert.equal(h.state(), latest)
+    assert.equal(h.states.length, publications)
+    reader.dispose()
+  }
+}
+{
+  const { h, reader } = harness6B()
+  await reader.refresh()
+  await Promise.all([reader.retryGeneral(), reader.retryMyPaths()])
+  assert.equal(ready6B(h).general.status, 'loaded')
+  assert.deepEqual(paths6B(ready6B(h).myPaths), cards6A)
+  reader.dispose()
+}
+
+// Different active paths both retain Continue, and distinct curricula still share one union read.
+{
+  const { h, reader } = harness6B()
+  h.enrollments = [active5A, { ...otherPath5A, path_version: 2 }]
+  await reader.refresh()
+  assert.deepEqual(h.keyReads, [[...lessonKeys5A].sort()])
+  const paths = paths6B(ready6B(h).myPaths)
+  assert.equal(paths.live.length, 2)
+  assert.ok(paths.live.every((card) => card.state === 'active' && card.continueLesson !== null))
+  assert.equal(renderPaths6B(ready6B(h).myPaths).match(/تابع المسار:/g)?.length, 2)
+  reader.dispose()
+}
+// A queued auth refresh is canceled by sign-out or disposal before it can start.
+for (const stop of ['sign-out', 'dispose'] as const) {
+  const { h, reader } = harness6B()
+  await reader.refresh()
+  h.switchAccount()
+  if (stop === 'sign-out') h.event('SIGNED_OUT', null)
+  else reader.dispose()
+  const calls = h.calls.length, publications = h.states.length
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(h.calls.length, calls)
+  assert.equal(h.states.length, publications)
+  reader.dispose()
+}
+
+// Sign-out UX remains retryable, but an old sign-out response cannot alter a new account.
+for (const outcome of ['success', 'error', 'account-switch'] as const) {
+  const { h, reader } = harness6B()
+  await reader.refresh()
+  const reached = deferred5B<void>(), release = deferred5B<void>()
+  h.before = async (stage) => { if (stage === 'sign-out') { reached.resolve(); await release.promise } }
+  if (outcome === 'error') h.signOutError = true
+  if (outcome === 'account-switch') h.failures.add('sign-out')
+  const pending = reader.signOut()
+  await reached.promise
+  assert.equal(ready6B(h).signingOut, true)
+  await reader.signOut()
+  assert.equal(h.calls.filter((call) => call === 'sign-out').length, 1)
+  if (outcome === 'account-switch') { h.switchAccount(); await h.until(settled6B) }
+  release.resolve()
+  await pending
+  if (outcome === 'success') assert.deepEqual(h.state(), { status: 'signed-out' })
+  else {
+    assert.equal(ready6B(h).signingOut, false)
+    assert.equal(ready6B(h).signOutError, outcome === 'error')
+    if (outcome === 'account-switch') assert.equal(ready6B(h).account.id, uuid5A(9000))
+  }
+  reader.dispose()
+}
+
+// Cards consume only 6A results. Pinned live links, paused/completed behavior, and accessible progress.
+{
+  const html = renderPaths6B({ status: 'ready', paths: cards6A })
+  assert.match(html, /dir="rtl"/)
+  assert.equal(html.match(/<progress /g)?.length, 2)
+  assert.equal(html.match(/>50%<\/p>/g)?.length, 2)
+  assert.equal(html.match(/تابع المسار:/g)?.length, 1)
+  assert.match(html, /نشط/)
+  assert.match(html, /متوقف مؤقتًا/)
+  assert.match(html, /<progress[^>]*value="1"[^>]*max="2"[^>]*aria-label=/)
+  for (const card of cards6A.live) {
+    assert.ok(html.includes(`href="${card.href}"`))
+    assert.doesNotMatch(card.href!, /\?enrollment=/)
+  }
+  const complete = renderPaths6B({ status: 'ready', paths: complete6A })
+  assert.match(complete, />100%<\/p>/)
+  assert.match(complete, /أكملت جميع دروس هذا الإصدار/)
+  assert.match(complete, /نشط/)
+  assert.doesNotMatch(complete, /تابع المسار:/)
+  const paused = renderPaths6B({ status: 'ready', paths: { ...cards6A, live: [cards6A.live[1]], history: [] } })
+  assert.match(paused, /50%/)
+  assert.doesNotMatch(paused, /تابع المسار:/)
+}
+// History is discoverable without live rows, exact-owner-linked, and has no progress or actions.
+{
+  const { h, reader } = harness6B()
+  h.enrollments = [withdrawn6A, superseded6A]
+  await reader.refresh()
+  const html = renderPaths6B(ready6B(h).myPaths)
+  assert.match(html, /<details/)
+  assert.match(html, /<summary[^>]*>سجل تسجيلاتي/)
+  assert.match(html, /للقراءة فقط/)
+  assert.match(html, /منسحب/)
+  assert.match(html, /تمت ترقيته/)
+  for (const entry of plan6A.history) assert.ok(html.includes(`href="${entry.href}"`))
+  assert.doesNotMatch(html, /<button|<progress|%|تابع المسار:|لم تسجّل/)
+  assert.ok(!h.calls.includes('path-progress'))
+  reader.dispose()
+}
+for (const plan of [missing6A, missingVersion6A]) {
+  const html = renderPaths6B({ status: 'ready', paths: deriveStudentMyPaths(plan, { status: 'complete', rows: [] }) })
+  assert.match(html, /غير متاح/)
+  assert.doesNotMatch(html, /<progress|%|تابع المسار:/)
+  if (plan === missing6A) assert.doesNotMatch(html, /href=|Test/)
+  else {
+    assert.match(html, /Test/)
+    assert.match(html, /href="\/student\/study-paths\/test-only\/"/)
+    assert.match(html, /الإصدار المثبت/)
+  }
+}
+{
+  const { h, reader } = harness6B()
+  h.enrollments = [active5A, enrollment5A({ id: uuid5A(9010), path_version: 2, state: 'paused' })]
+  await reader.refresh()
+  const html = renderPaths6B(ready6B(h).myPaths)
+  assert.match(html, /بيانات التسجيل غير متسقة/)
+  assert.ok(html.includes(`my-path-inconsistent-${pathId5A}`))
+  assert.doesNotMatch(html, /<progress|تابع المسار:|href=|لم تسجّل|<button/)
+  assert.equal(paths6B(ready6B(h).myPaths).live.length, 0)
+  assert.ok(!h.calls.includes('path-progress'))
+  reader.dispose()
+}
+for (const catalog of [[], catalog6A]) {
+  const { h, reader } = harness6B(catalog)
+  h.enrollments = []
+  await reader.refresh()
+  assert.ok(h.calls.includes('enrollments'))
+  const html = renderPaths6B(ready6B(h).myPaths, catalog.length > 0)
+  assert.match(html, catalog.length ? /لم تسجّل في أي مسار بعد/ : /لا توجد مسارات منشورة بعد/)
+  assert.match(html, /href="\/study-paths\/"/)
+  reader.dispose()
+}
+
+// Membership does not filter, prioritize or reorder general lessons, including the eight-row limit.
+// A shared incomplete lesson legitimately supplies both Continue concepts.
+{
+  const { h, reader } = harness6B()
+  await reader.refresh()
+  const general = ready6B(h).general
+  assert.equal(general.status, 'loaded')
+  if (general.status !== 'loaded') throw new Error('general lessons missing')
+  assert.deepEqual(general.studentProgress, expectedGeneral6B)
+  assert.equal(general.studentProgress.unknownRowCount, 1)
+  assert.equal(general.studentProgress.recentLessons.length, 8)
+  assert.deepEqual(general.studentProgress.recentLessons.map((lesson) => lesson.lessonKey),
+    generalRows6B.slice(1, 9).map((row) => row.lesson_key))
+  assert.equal(general.studentProgress.continueLesson?.lessonKey,
+    paths6B(ready6B(h).myPaths).live[0].continueLesson?.lessonKey)
+  const before = renderHome6B(h.state()).split('<section dir="rtl"')[0]
+  h.enrollments = []
+  await reader.retryMyPaths()
+  assert.equal(ready6B(h).general, general)
+  assert.equal(renderHome6B(h.state()).split('<section dir="rtl"')[0], before)
+  reader.dispose()
+}
+
+// Build props keep the existing all-version/display boundary, outside browser data loading.
+const shell6B = readFileSync(new URL('../src/pages/student/index.astro', import.meta.url), 'utf8')
+const controllerSource6B = readFileSync(new URL('../src/lib/student-home-controller.ts', import.meta.url), 'utf8')
+const pathsSource6B = readFileSync(new URL('../src/islands/StudentMyPaths.tsx', import.meta.url), 'utf8')
+assert.match(shell6B, /publicStudyPaths\.map\(studentStudyPathPageProps\)/)
+assert.match(shell6B, /<StudentHome myPathsCatalog=\{myPathsCatalog\} client:load/)
+assert.match(shell6B, /noindex/)
+assert.match(controllerSource6B, /studentProgress: deriveStudentProgress\(rows, metadata\)/)
+assert.match(controllerSource6B, /planStudentMyPaths\(owner, rows, catalog\)/)
+assert.equal(controllerSource6B.match(/reads\.readProgress\(plan\.lessonKeys\)/g)?.length, 1)
+assert.match(controllerSource6B, /studentStudyPathCloud\.readOwnerEnrollments/)
+assert.match(controllerSource6B, /studentStudyPathCloud\.readProgress/)
+assert.match(controllerSource6B, /readGeneralProgress: readStudentProgress/)
+assert.match(controllerSource6B, /readGeneralCatalog: fetchStudentLessonCatalog/)
+assert.doesNotMatch(studentHomeSource, /getSession|getUser|onAuthStateChange|readOwnerEnrollments|readProgress|deriveStudentMyPaths|planStudentMyPaths|deriveStudentProgress/)
+assert.doesNotMatch(pathsSource6B, /supabase|\.\/StudentStudyPath|fetch\s*\(|useEffect|useState|readOwnerEnrollments|readProgress|planStudentMyPaths|deriveStudentMyPaths/)
+for (const source of [studentHomeSource, pathsSource6B, controllerSource6B]) {
+  assert.doesNotMatch(source, /\.(from|rpc|insert|update|delete|upsert|enroll|pause|resume|withdraw|upgrade)\s*\(/)
+  assert.doesNotMatch(source, /localStorage|sessionStorage|merge_lesson_progress|writeProgress|service_role|youtube|telegram|providerId|corpusId/i)
+  assert.doesNotMatch(source, /node:|['"]\.\.?\/[^'"]*(?:public-study-paths|\/data)['"]|readFile|data-loader/)
+  assert.doesNotMatch(source, /primaryPath|focusedPath|overallProgress|totalProgress|studyPathEnrollmentActions|studyPathUpgrade/)
+}
 assert.deepEqual(publicStudyPaths, [])
 console.log('selfcheck ok')
