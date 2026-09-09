@@ -1,21 +1,24 @@
 # الحالة الحالية
 
-آخر تحقق محلي: `2026-09-09` على `develop` عند baseline `bc04797e16ab5515c0aee5211d95c6276d5e1247` لقبول Slice 6C. اكتملت Slice 6A عند `5ab65c0` وSlice 6B عند `bc04797`: «مساراتي» داخل مساحة الطالب مع بقاء Continue العام وRecent مستقلين. القبول محلي وحتمي ببيانات داخل الذاكرة وفحص المخرجات static، مع CI ناجح للـcommits المثبتة وبقاء الكتالوج العام فارغًا؛ لا رحلة تسجيل إنتاجية مختبرة في متصفح مصادق عليه ولا قبول مستضاف جديد. الأدلة والحدود في [خطة Slice 6](plans/06-student-my-paths.md).
+آخر تحقق مستضاف وتشغيلي: `2026-09-09` على `develop` عند baseline `438cc02` (`docs: close my paths slice 6`).
+الحالة المعتمدة: **Slice 7 operational closeout PASS ; Study Paths V1 implementation techniquement close ; production content/browser acceptance pending first reviewed scientific path.**
 
-آخر تحقق مستضاف لـSlice 4.1 بقي بتاريخ `2026-09-04` على PostgreSQL `17.6`. لم ينفذ اختبار تزامن حقيقي مضبوط بجلسَتين، ولم تعد قراءة حالة الجداول البعيدة في قبول Slice 6C.
+اكتملت جميع شرائح Study Paths V1 (من 1 إلى 7) تقنيًا وتشغيليًا. أثبت تحقق Slice 7 المستضاف على PostgreSQL `17.6` ومشروع `flrqmxxvdlwjutevefax` قيد الاستبعاد المؤجل في تزامن حقيقي بجلسَتين مستقلتين، ونجح مسبار النشر والتراجع (rollback)، واستقرت الجداول في حالة صفرية ونظيفة (`0` صفوف). تبقى رحلة التسجيل المتصفحية الإنتاجية الحقيقية معلقة حتى اعتماد ونشر أول مسار علمي مراجع في الكتالوج (`publicStudyPaths = []`).
 
-## Slice 4.1 — HOSTED APPLIED AND VERIFIED
+## Slice 7 — HOSTED OPERATIONAL CLOSEOUT AND CONCURRENCY VERIFICATION
 
-طبقت migration `20260904195919_study_path_enrollments_one_live_forward_only.sql` على المشروع المستضاف `flrqmxxvdlwjutevefax` وتحقق سلوكها على PostgreSQL `17.6` بتاريخ `2026-09-04`.
+تحقق الإغلاق التشغيلي المستضاف على PostgreSQL `17.6` في المشروع `flrqmxxvdlwjutevefax` بتاريخ `2026-09-09`:
 
-- يوجد قيد B-tree exclusion واحد لكل `(user_id, path_id)` حيث الحالة `active` أو `paused`، من النوع `DEFERRABLE INITIALLY DEFERRED`: يسمح بالتعايش المؤقت للمصدر والهدف داخل الترقية الذرية target-first، لكنه يمنع التزام أكثر من نسخة live للمسار نفسه. ينشئ القيد فهرسه تلقائيًا بلا extension أو فهرس زائد.
-- تبقى المسارات المختلفة live بالتوازي بلا primary/focused path. تبقى unique الإصدار الدقيق immediate وهدف `ON CONFLICT` الصريح.
-- enroll للإصدار نفسه active/paused idempotent بلا resume ضمني؛ يرفض إصدارًا مختلفًا عند وجود live للمسار نفسه ويوجه إلى upgrade.
-- upgrade يشترط هدفًا أكبر من المصدر قبل فرع الإعادة الناجحة أيضًا. تبقى الترقية target-first والرابط الدقيق وpublication/retirement والأقفال والأدوار كما هي.
-- يتحقق lifecycle من supersession عند INSERT أو عند إنشائه بـUPDATE: هدف active لنفس المالك والمسار وبنسخة أكبر وغير المصدر. لا يلزم بقاء الهدف التاريخي active لاحقًا.
-- بعد withdrawal، إذا لم يبق live، يجوز enroll لإصدار آخر مؤهل وفق دلالات terminal للإصدار الدقيق؛ لا lifetime monotonicity.
-- تفحص migration التعارضات تحت `ACCESS EXCLUSIVE` داخل transaction يديرها Supabase migration runner دون `BEGIN/COMMIT` صريحين في الملف؛ أثبت probe فاشل rollback ذريًا بلا object أو history row باقٍ، وتفشل migration دون إصلاح التاريخ عند وجود عدة live أو رابط supersession غير صالح. لا ترفض هدفًا تاريخيًا لمجرد تغير حالته.
-- تحقق مستضافًا القيد المؤجل و`ON CONFLICT` ومصفوفات RPC/lifecycle وRLS/ACL والأقفال والتنظيف النهائي. لم ينفذ اختبار ضغط متزامن حقيقي مضبوط بجلسَتين.
+- **خط الأساس المستضاف (Slice 7A):** الفرع `develop` نظيف عند `438cc02`، وتطابق كامل في الـmigrations الست (`20260824000000`، `20260826000000`، `20260829000000`، `20260902000000`، `20260903164705`، `20260904195919`). الجداول فارغة تمامًا (`study_path_versions = 0` و`study_path_enrollments = 0`)، وRLS مفعل، وصلاحيات ACL مطابقة للمواصفات.
+- **اختبار التزامن الحقيقي بجلسَتين (Slice 7B):** نُفذ اختبار متزامن حقيقي بمعاملتي PostgreSQL مستقلتين فعليًا دون تعطيل القيود، لنفس المستخدم ونفس المسار مع محاولة تسجيل متزامنة لإصدارين (v1 وv2):
+  - الجلسة أ: نجح الـ`COMMIT` برمز `RC=0`.
+  - الجلسة ب: رُفض الـ`COMMIT` برمز `RC=1` مع خطأ PostgreSQL رقم `23P01`: `conflicting key value violates exclusion constraint "study_path_enrollments_one_live_per_path"`.
+  - النتيجة: التزام صف live واحد فقط (`committed_live_rows = 1`)؛ وبذلك ثبت القيد المؤجل `DEFERRABLE INITIALLY DEFERRED` عمليًا في تزامن حقيقي وليس فقط ساكنًا.
+  - استُبعدت المحاولتان الأوليتان كمسابر غير صالحة (الأولى لفشلها على `lifecycle_consistent`، والثانية لاستخدامها `session_replication_role=replica`). الاعتماد الحصري على الاختبار النهائي الصالح، وأعاد التنظيف النهائي الجداول للحالة الصفرية.
+- **مسبار النشر والتراجع (rollback) (Slice 7C):** مسار اصطناعي داخل معاملة: `before_count = 0`، ثم `INSERT` صالح في `study_path_versions`، ثم `ROLLBACK` صريح، و`after_rollback = 0`. لم تتبق أي بيانات اصطناعية.
+- **مراجعة الأمان والأداء:** لا توجد ملاحظات مانعة لمسارات الدراسة. RLS على `study_path_versions` بلا policies مقصود لحجب سجل النشر عن المتصفح، ودوال RPC بـ`SECURITY DEFINER` المتاحة لـ`authenticated` مقصودة وتمثل نموذج RPC-only. الفهرس `study_path_enrollments_superseded_by_idx` يُحتفظ به ولا يُحذف استنادًا لجدول فارغ مؤقتًا.
+- **ديون عامة خارج نطاق مسارات الدراسة:** رُصدت كديون سابقة تحال لتحصين منفصل: دوال `handle_new_user()` و`rls_auto_enable()` مكشوفة `EXECUTE` لدور `PUBLIC`، وحماية كلمات المرور المسربة في Auth معطلة، وسياسات `profiles` تعيد تقييم `auth.uid()` لكل صف.
+- **عقد التكامل المستقبلي مع Telegram / Corpus:** العقد الفاصل: `raw Telegram archive → transcription → LessonPart / lesson assembly → review → canonical corpus export → Product resolver → lesson_key stable`. الـcorpus مشروع منفصل؛ لا تدخل معرّفات Telegram أو YouTube أو corpus في جداول أو اشتقاقات المسارات، وتغيير المصدر تحت نفس الـ`lesson_key` لا ينشئ إصدار مسار جديد.
 
 ## يعمل الآن
 
@@ -42,20 +45,22 @@
 - تظهر مسارات مختلفة متعددة live بالتوازي بلا primary/focused path؛ active غير المكتمل له Continue الخاص به، وpaused يظهر بتقدمه دون Continue، وactive المكتمل يبقى active بلا Continue. `lesson_progress.completed` وحده حقيقة الاكتمال، والبطاقات مثبتة على نسخ التسجيل؛ لا browser storage truth ولا provider IDs في عقود المسارات ولا lifecycle writes أو service-role access في dashboard.
 - روابط live بلا `?enrollment=`، وسجل withdrawn/superseded للقراءة فقط بروابط UUID التسجيل المملوك الدقيقة. لا يشتق dashboard تقدم التاريخ؛ التفاصيل والترقية تبقيان في صفحة Slice 5. غياب التعريف يمنع العنوان المخترع والرابط، وغياب النسخة يمنع النسبة/Continue، والمجموعة الفاسدة لا تختار فائزًا، والمالك الأجنبي يفشل الفرع كله مغلقًا. فشل التقدم لا يصبح `0%`.
 - يمسح تغيير الحساب أو sign-out الفرعين وسجل المسارات والروابط القديمة فورًا؛ تمنع الأجيال نتائج النجاح/الفشل المتأخرة وتفصل محاولات القراءة. يعالج controller focus/pageshow/dispose، ويحفظ العمل للحساب نفسه مع TOKEN_REFRESHED/SIGNED_IN، ويخرج من auth callback قبل بدء تحقق جديد. يمكن ظهور الدرس نفسه في Continue العام وContinue المسار دون تعارض.
+- اكتملت Slice 7 بالإغلاق التشغيلي المستضاف: أثبت اختبار التزامن الحقيقي المستضاف بجلسَتين مستقلتين على PostgreSQL 17.6 قيد `study_path_enrollments_one_live_per_path` المؤجل برفض الجلسة الثانية برمز خطأ 23P01 والتزام صف live واحد، وأثبت مسبار النشر والتراجع (rollback) سلامة المعاملات، واستقرت الجداول في حالة صفرية ونظيفة (`0` صفوف)، وثبتت مراجعة الأمان والأداء سلامة نموذج Study Paths، مع توثيق عقد التكامل المستقبلي مع مشروع الكوربس المنفصل.
 
 ## جزئي أو غير موجود
 
 - لا تشمل لوحة مساحة الطالب ملاحظات أو محفوظات سحابية أو نسبة تقدم عامة للأرشيف أو دلالات reset/rewatch؛ «مساراتي» وصفحة المسار الخاص منفذتان.
-- لا يوجد مسار علمي منشور فعليًا؛ كتالوج `publicStudyPaths` فارغ عمدًا، لذلك لا يولد البناء صفحة مسار تفصيلية إنتاجية لرحلة تسجيل My Paths حقيقية. الـfixture تقني draft، والاختبارات تستخدم مناهج داخل الذاكرة. آخر تحقق مستضاف سابق ترك جدولي النشر والتسجيل فارغين؛ لم تعد قراءة حالتهما في Slice 5D أو Slice 6C، ولم تنفذ acceptance mutation مستضافة جديدة في Slice 6.
+- لا يوجد مسار علمي منشور فعليًا؛ كتالوج `publicStudyPaths` فارغ عمدًا، لذلك لا يولد البناء صفحة مسار تفصيلية إنتاجية لرحلة تسجيل My Paths حقيقية. الـfixture تقني draft، والاختبارات تستخدم مناهج داخل الذاكرة. ترك مسبار النشر واختبار التزامن في Slice 7 جدولي النشر والتسجيل فارغين ونظيفين؛ تبقى رحلة تسجيل My Paths الإنتاجية معلقة بنشر أول مسار علمي مراجع.
 - لا توجد توصيات لمسارات الدراسة، ولا ينفذ هذا المستودع ingestion أو corpus خاصًا بـTelegram ضمن الميزة.
 - لا توجد Ask AI أو RAG؛ البحث الدلالي استرجاع فقط.
 
 ## الخطوة التالية
 
-الخطوة التالية Slice 7 closeout وفق خطة V1، وليست مزيدًا من ميزات Slice 6. لم تبدأ أعمال Slice 7 في قبول 6C. تظل رحلة My Paths المتكاملة في متصفح بحساب حقيقي مشروطة بمنهج علمي منشور مراجع أو بيئة اختبار منفصلة معزولة؛ لم ينشر fixture لاختلاقها. لا تدعي selfchecks أو CI/build إثبات الشبكة/RLS المستضافة أو التزامن الحقيقي المضبوط بجلسَتين.
+الخطوة التالية بعد إغلاق Slice 7 التشغيلي هي إعداد ومراجعة أول مسار علمي حقيقي ونشره لاختبار رحلة My Paths الإنتاجية المتكاملة في المتصفح بحساب مصادق عليه. يلي ذلك في مسار منفصل مهمة تحصين لـSupabase لمعالجة الديون العامة المرصودة (صلاحيات الدوال العامة، وتفعيل leaked-password protection، وسياسات profiles).
 
 ## عوائق ومخاطر نشطة
 
+- ديون عامة في Supabase مرصودة أثناء مراجعة Slice 7 وخارج نطاق مسارات الدراسة: دوال `handle_new_user()` و`rls_auto_enable()` مكشوفة `EXECUTE` لدور `PUBLIC`؛ خاصية leaked-password protection في Auth معطلة؛ وسياسات جدول `profiles` تعيد تقييم `auth.uid()` لكل صف في البيئة المستضافة. تحتاج لتحصين منفصل.
 - حفظ أكبر موضع لا يمثل الرجوع المقصود أو إعادة الدراسة.
 - قد يبقى ظل `localStorage` أحدث قليلًا من Supabase بعد `pagehide`، وهو غير مفصول حاليًا حسب المستخدم في المتصفح المشترك.
 - ACL `service_role` على `profiles` غير معتاد لكنه سابق لـ02V ولم يتغير، والتطبيق لا يستخدمه في المتصفح.

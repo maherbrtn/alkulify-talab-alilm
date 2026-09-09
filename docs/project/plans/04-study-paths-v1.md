@@ -1,6 +1,6 @@
 # خطة: 04 — مسارات الدراسة V1
 
-- الحالة: `نشطة — Slice 6 مكتملة محليًا وحتميًا؛ التالية Slice 7 closeout؛ قبول التسجيل الإنتاجي واختبار تزامن Slice 4.1 المضبوط لم ينفذا`
+- الحالة: `مكتملة تقنيًا وتشغيليًا — Slice 7 operational closeout PASS؛ Study Paths V1 implementation تقنيًا مغلقة؛ قبول المتصفح/الإنتاج معلق بنشر أول مسار علمي مراجع`
 - المالك: `Codex / صاحب المشروع`
 - آخر تحديث: `2026-09-09`
 - ملف الوحدة: `docs/project/06-STUDY-PATHS.md`
@@ -9,7 +9,7 @@
 
 إضافة مسارات دراسة عامة ومنظمة فوق الدروس الحالية، مع تسجيل خاص بالطالب مثبت على إصدار منهج غير قابل للتغيير، ومن دون إنشاء مصدر ثانٍ لاكتمال الدرس أو ربط المسار بمزود محتوى. يكتمل V1 عندما يمكن نشر تعريفات ثابتة بإصدارات، وتسجيل الطالب في عدة مسارات نشطة بالتوازي، واشتقاق تقدم كل مسار ووحداته من `lesson_progress`، وعرض «تابع المسار» لكل تسجيل نشط مع بقاء Continue العام والدروس الأخيرة مستقلين.
 
-بدأ التنفيذ واكتملت Slices 1–3V، ثم اكتملت Slice 4 محليًا ومستضافًا بجدول `study_path_enrollments` وRLS/RPCs للتسجيل وpause/resume/withdraw/upgrade. لا تخزن الشريحة progress أو completion أو تفاصيل المنهج، ولا تقيد تعدد المسارات المختلفة النشطة. اكتملت Slice 5 محليًا وSlice 6A عند `5ab65c0` وSlice 6B عند `bc04797`؛ يسجل [قبول Slice 6C](06-student-my-paths.md) نتائج التدقيق والبوابات وحدود التحقق. التالية Slice 7 للإغلاق التشغيلي؛ لم تبدأ أعمالها هنا.
+بدأ التنفيذ واكتملت Slices 1–3V، ثم اكتملت Slice 4 محليًا ومستضافًا بجدول `study_path_enrollments` وRLS/RPCs للتسجيل وpause/resume/withdraw/upgrade. لا تخزن الشريحة progress أو completion أو تفاصيل المنهج، ولا تقيد تعدد المسارات المختلفة النشطة. اكتملت Slice 5 محليًا وSlice 6 محليًا وحتميًا؛ وأغلقت Slice 7 بالإغلاق التشغيلي المستضاف (إثبات التزامن الحقيقي ومسبار النشر ومراجعة الأمان). إغلاق V1 التقني والتشغيلي مكتمل (PASS)، بينما قبول رحلة المتصفح الإنتاجية معلق حتى نشر أول مسار علمي مراجع.
 
 ## الحالة الأساسية والسياق الموثق قبل Slice 6
 
@@ -272,13 +272,47 @@ type StudyPathLesson = {
 - [x] رابط فتح المسار الخاص يتيح الوصول إلى تفاصيل وترقية Slice 5D؛ لا أزرار lifecycle أو RPCs للمسارات على dashboard نفسه.
 - [x] Slice 6C: تدقيق نهائي وتوثيق القبول المحلي والحتمي وبوابات CI/build، دون تعديل كود أو selfchecks أو schema/RLS/RPC. انظر `06-student-my-paths.md` للأدلة الدقيقة.
 
-الكتالوج الإنتاجي فارغ عمدًا ولم ينشر fixture؛ لم تختبر رحلة تسجيل My Paths إنتاجية بالمصادقة، ولم تنفذ acceptance mutation مستضافة جديدة. يتطلب قبول المتصفح منهجًا مراجعًا أو بيئة اختبار منفصلة. يبقى اختبار تزامن Slice 4.1 الحقيقي المضبوط بجلسَتين غير منفذ.
+الكتالوج الإنتاجي فارغ عمدًا ولم ينشر fixture؛ لم تختبر رحلة تسجيل My Paths إنتاجية بالمصادقة، ولم تنفذ acceptance mutation مستضافة جديدة في Slice 6. يتطلب قبول المتصفح الإنتاجي الكامل منهجًا مراجعًا أو بيئة اختبار منفصلة.
 
 ### Slice 7 — الإغلاق التشغيلي والتوثيق
 
-- [ ] تحقق publication/rollback مستضاف ومراجعة security/performance.
-- [ ] تحديث `06-STUDY-PATHS.md` و`03-CURRENT-STATE.md` بما نفذ فعلاً فقط.
-- [ ] توثيق عقد التكامل المستقبلي مع corpus من دون تنفيذه.
+- [x] تحقق publication/rollback مستضاف ومراجعة security/performance.
+- [x] تحديث `06-STUDY-PATHS.md` و`03-CURRENT-STATE.md` بما نفذ فعلاً فقط.
+- [x] توثيق عقد التكامل المستقبلي مع corpus من دون تنفيذه.
+
+#### إثباتات Slice 7 التشغيلية
+
+1. **Slice 7A — خط الأساس المستضاف (Hosted Baseline):**
+   - مستودع `develop` نظيف عند `438cc02` (`docs: close my paths slice 6`).
+   - المشروع المستضاف المرتبط: `flrqmxxvdlwjutevefax`، مع PostgreSQL `17.6`.
+   - تطابق migrations الست محليًا وبعيدًا: `20260824000000`، `20260826000000`، `20260829000000`، `20260902000000`، `20260903164705`، `20260904195919`.
+   - `study_path_versions = 0` و`study_path_enrollments = 0`.
+   - استمرار تفعيل RLS ومطابقة صلاحيات Study Paths (ACL) لنتائج الفحوص السابقة.
+
+2. **Slice 7B — اختبار التزامن الحقيقي بجلسَتين (Real Two-Session Concurrency Test):**
+   - نُفذ اختبار تزامن حقيقي على البيئة المستضافة بمعاملتي PostgreSQL مستقلتين فعليًا دون تعطيل أي قيود أثناء الاختبار.
+   - نفس المستخدم (`user_id`) ونفس المسار (`path_id`) مع محاولة تسجيل متزامنة لإصدارين (v1 وv2):
+     - الجلسة أ (Session A): نجح الـ`COMMIT` برمز خروج `RC=0`.
+     - الجلسة ب (Session B): رُفض الـ`COMMIT` برمز خروج `RC=1` مع خطأ PostgreSQL رقم `23P01`: `conflicting key value violates exclusion constraint "study_path_enrollments_one_live_per_path"`.
+     - النتيجة بعد المعاملتين: `committed_live_rows = 1` فقط.
+     - أثبت الاختبار عمليًا قيد الاستبعاد المؤجل `DEFERRABLE INITIALLY DEFERRED` في تزامن حقيقي عملي، وليس فقط ساكنًا.
+     - استُبعدت المحاولتان الأوليتان كمسابر غير صالحة (الأولى لفشلها على `lifecycle_consistent`، والثانية لاستخدامها `session_replication_role=replica`). الاعتماد فقط على الاختبار النهائي الصالح.
+     - التنظيف النهائي بعد الاختبار: `study_path_versions = 0` و`study_path_enrollments = 0`.
+
+3. **Slice 7C — مسبار النشر والتراجع (rollback) (Publication / Rollback Probe):**
+   - استُخدم مسار اصطناعي داخل معاملة: `before_count = 0`، ثم `INSERT` صالح في `study_path_versions`، ثم `ROLLBACK` صريح، نتج عنه `after_rollback = 0`.
+   - الحالة النهائية نظيفة وصفرية: `study_path_versions = 0` و`study_path_enrollments = 0`.
+
+4. **مراجعة الأمان والأداء (Security / Performance Review):**
+   - Study Paths: لا توجد ملاحظات مانعة. RLS على `study_path_versions` بلا سياسة هو سلوك مقصود لحجب سجل النشر عن المتصفح. دوال RPC بـ`SECURITY DEFINER` المنفذة لـ`authenticated` مقصودة وتمثل نموذج RPC-only. الفهرس `study_path_enrollments_superseded_by_idx` الذي أفادت التقارير بأنه غير مستخدم يُحتفظ به ولا يُحذف استنادًا لجدول فارغ مؤقتًا.
+   - ديون عامة خارج نطاق Study Paths (Global Debt / Out of Scope): دوال `handle_new_user()` و`rls_auto_enable()` مكشوفة `EXECUTE` لـ`PUBLIC`، وحماية كلمات المرور المسربة في Auth معطلة، وسياسات `profiles` تعيد تقييم `auth.uid()` لكل صف. هذه الملاحظات مسجلة كديون سابقة تحال لتحصين عام منفصل ولا تُعدل في Slice 7.
+
+5. **عقد التكامل المستقبلي مع Telegram / Corpus:**
+   - تسلسل العقد: `raw Telegram archive → transcription → LessonPart / lesson assembly → review → canonical corpus export → Product resolver → lesson_key stable`.
+   - الـcorpus مشروع مستقل ومنفصل؛ لا تدخل معرّفات Telegram أو YouTube أو corpus في ملفات المسارات أو جداول التسجيل أو اشتقاق التقدم. تغيير المصدر تحت نفس الـ`lesson_key` لا ينشئ إصدار مسار جديد.
+
+6. **صيغة وحدود القبول:**
+   - "Slice 7 operational closeout PASS ; Study Paths V1 implementation techniquement close ; production content/browser acceptance pending first reviewed scientific path."
 
 كل Slice لها diff ومراجعة وبوابات تحقق مستقلة، ولا يبدأ توسيع النطاق ضمنيًا إذا فشلت بوابتها.
 
@@ -323,27 +357,27 @@ type StudyPathLesson = {
 
 هذه قائمة الإغلاق النهائي لـV1 ضمن Slice 7، وليست قائمة ميزات Slice 6 المتبقية. اكتمال تنفيذ Slice 6 وقبولها المحلي/الحتمي لا يعني إغلاق القبول التشغيلي أو رحلة التسجيل الإنتاجية؛ أدلة Slice 6 وحدودها في خطتها المستقلة.
 
-- [ ] يستطيع الزائر تصفح المسارات المنشورة وإصداراتها العامة بلا حساب وبلا query إلى Supabase registry للـrender.
-- [ ] كل تعريف منشور يستخدم `lesson_key` فقط، وكل مفتاح يحل عبر registry وقت البناء.
-- [ ] لا يظهر provider ID في membership أو enrollment أو progress derivation.
-- [ ] digest deterministic ويغطي module identity/title/objective/order وlesson membership/order.
-- [ ] تعديل أي curriculum-significant field يتطلب version جديدًا، بينما path-level presentation metadata لا يتطلبه.
-- [ ] الإصدار المنشور immutable، غير فارغ، ولا يكرر درسًا أو وحدة.
-- [ ] التسجيل مثبت على إصدار ولا يتبع latest تلقائيًا.
-- [ ] الترقية صريحة وتحول القديم إلى `superseded` وتحفظ الاستفادة من تقدم المفاتيح المشتركة.
-- [ ] يمكن للمستخدم امتلاك مسارين أو أكثر في حالة `active` بالتوازي.
-- [ ] لا يوجد global focused/primary path؛ نسخة live ملتزمة واحدة لكل مستخدم/مسار مع السماح بمسارات مختلفة بالتوازي.
-- [ ] owner وحده يقرأ التسجيل، وanon/other-user/direct table mutation مرفوضة.
-- [ ] `lesson_progress.completed` وحده يحدد اكتمال الدرس؛ لا جدول completion ثانٍ.
-- [ ] الوحدة والمسار والنسبة مشتقة بالقواعد الموثقة، ويحتسب التقدم السابق للتسجيل والدرس المشترك بلا نسخ بيانات.
-- [ ] كل active path يعرض تقدمه وContinue الخاص به: أول required incomplete حسب الترتيب، مع resume الحالي، وتجاوز المكتمل.
-- [ ] Continue العام وRecent يبقيان مستقلين وغير متغيري المعنى.
-- [ ] retirement يمنع enrollment جديدًا ولا يكسر التسجيلات أو الصفحات التاريخية.
-- [ ] تعريفات الإصدارات التاريخية وregistry mappings اللازمة تبقى قابلة للبناء.
-- [ ] drift بين Git digest وSupabase projection يفشل publication.
-- [ ] `pnpm check` و`pnpm build` و`pnpm exec tsc --noEmit` و`git diff --check` تنجح لكل شريحة وظيفية.
-- [ ] اختبارات RLS/RPC المستضافة تثبت الملكية والحالات والترقية وتعدد active enrollments قبل إغلاق شرائح Supabase.
-- [ ] لا ينفذ أي عمل corpus/Telegram في هذا المستودع ضمن V1.
+- [ ] يستطيع الزائر تصفح المسارات المنشورة وإصداراتها العامة بلا حساب وبلا query إلى Supabase registry للـrender. (معلق في الإنتاج حتى نشر أول مسار علمي في الكتالوج العام؛ الكود البرمجي والقوالب والـbuild محققة تقنيًا)
+- [x] كل تعريف منشور يستخدم `lesson_key` فقط، وكل مفتاح يحل عبر registry وقت البناء.
+- [x] لا يظهر provider ID في membership أو enrollment أو progress derivation.
+- [x] digest deterministic ويغطي module identity/title/objective/order وlesson membership/order.
+- [x] تعديل أي curriculum-significant field يتطلب version جديدًا، بينما path-level presentation metadata لا يتطلبه.
+- [x] الإصدار المنشور immutable، غير فارغ، ولا يكرر درسًا أو وحدة.
+- [x] التسجيل مثبت على إصدار ولا يتبع latest تلقائيًا.
+- [x] الترقية صريحة وتحول القديم إلى `superseded` وتحفظ الاستفادة من تقدم المفاتيح المشتركة.
+- [x] يمكن للمستخدم امتلاك مسارين أو أكثر في حالة `active` بالتوازي.
+- [x] لا يوجد global focused/primary path؛ نسخة live ملتزمة واحدة لكل مستخدم/مسار مع السماح بمسارات مختلفة بالتوازي. (ثبت في اختبار التزامن الحقيقي المستضاف بجلسَتين مستقلتين في Slice 7B)
+- [x] owner وحده يقرأ التسجيل، وanon/other-user/direct table mutation مرفوضة.
+- [x] `lesson_progress.completed` وحده يحدد اكتمال الدرس؛ لا جدول completion ثانٍ.
+- [x] الوحدة والمسار والنسبة مشتقة بالقواعد الموثقة، ويحتسب التقدم السابق للتسجيل والدرس المشترك بلا نسخ بيانات.
+- [ ] كل active path يعرض تقدمه وContinue الخاص به: أول required incomplete حسب الترتيب، مع resume الحالي، وتجاوز المكتمل. (متحقق حتميًا في Slice 6؛ معلق قبول رحلة المتصفح الإنتاجية الحقيقية بحساب مصادق عليه حتى نشر أول مسار علمي)
+- [x] Continue العام وRecent يبقيان مستقلين وغير متغيري المعنى.
+- [x] retirement يمنع enrollment جديدًا ولا يكسر التسجيلات أو الصفحات التاريخية.
+- [x] تعريفات الإصدارات التاريخية وregistry mappings اللازمة تبقى قابلة للبناء.
+- [x] drift بين Git digest وSupabase projection يفشل publication.
+- [x] `pnpm check` و`pnpm build` و`pnpm exec tsc --noEmit` و`git diff --check` تنجح لكل شريحة وظيفية.
+- [x] اختبارات RLS/RPC المستضافة تثبت الملكية والحالات والترقية وتعدد active enrollments قبل إغلاق شرائح Supabase.
+- [x] لا ينفذ أي عمل corpus/Telegram في هذا المستودع ضمن V1.
 
 ## مخاطر وشروط توقف
 
@@ -359,12 +393,12 @@ type StudyPathLesson = {
 
 لكل شريحة وظيفية:
 
-- [ ] selfchecks الأقرب لعقد الشريحة وحالاتها الطرفية.
-- [ ] مراجعة عدم تسرب provider IDs وعدم تكرار completion state.
-- [ ] `pnpm check`.
-- [ ] `pnpm build`.
-- [ ] `pnpm exec tsc --noEmit`.
-- [ ] `git diff --check`.
+- [x] selfchecks الأقرب لعقد الشريحة وحالاتها الطرفية.
+- [x] مراجعة عدم تسرب provider IDs وعدم تكرار completion state.
+- [x] `pnpm check`.
+- [x] `pnpm build`.
+- [x] `pnpm exec tsc --noEmit`.
+- [x] `git diff --check`.
 
 عند إنشاء هذه الخطة التوثيقية الأصلية:
 
@@ -374,6 +408,16 @@ type StudyPathLesson = {
 
 ## النتيجة
 
-اكتملت Slice 1 عند `45291c9`: نموذج المجال static، والتحقق، والـcanonical digest، واشتقاقات التقدم وContinue، وتغطية التقدم السابق والمشترك. اكتملت Slice 2 عند `3ad64fc` بكتالوج وصفحات قراءة static من Git فقط، من دون نشر fixture المسودة كمنهج حقيقي. اكتملت Slice 3 محليًا عند `c8757fb` بـmigration registry أدنى وverifier ثابت، ثم أغلقت Slice 3V بتطبيق وتحقق مستضافين. أغلقت Slice 4 محليًا ومستضافًا بmigration التسجيل وخمس RPCs محمية، وبقيت الجداول فارغة بعد rollback السابق؛ اكتملت Slice 5A–5D محليًا فوق `8415b978` بواجهة التسجيل والتقدم والتاريخ والترقية والمصالحة.
+اكتملت جميع شرائح Study Paths V1 (من Slice 1 إلى Slice 7) تقنيًا وتشغيليًا:
+- Slice 1: نموذج المجال static، والتحقق، والـcanonical digest، واشتقاقات التقدم وContinue.
+- Slice 2: كتالوج وصفحات قراءة static من Git فقط دون كشف المسودة.
+- Slice 3 و3V: تطبيق وتحقق registry النشر الأدنى المستضاف.
+- Slice 4 و4.1V: جدول التسجيل وRLS ودوال RPC الخمس وقيد النسخة live الواحدة المؤجل.
+- Slice 5A–5D: واجهة التسجيل والمسار الخاص والتاريخ والترقية ومصالحة الأجيال.
+- Slice 6A–6C: دمج «مساراتي» في مساحة الطالب بفرعي قراءة مستقلين وبطاقات متوازية وسجل قراءة فقط.
+- Slice 7: الإغلاق التشغيلي المستضاف (خط الأساس النظيف، إثبات قيد التزامن الحقيقي بجلسَتين مستقلتين، مسبار النشر والتراجع (rollback)، مراجعة الأمان والأداء، وعقد الـcorpus المستقبلي).
 
-اكتملت Slice 6A عند `5ab65c0` وSlice 6B عند `bc04797`، وتوثق `06-student-my-paths.md` قبول Slice 6C المحلي والحتمي وCI للـcommits المثبتة. لا عطل وظيفي استلزم تصحيح الكود في 6C، ولا schema/RLS/RPC أو hosted mutation جديدة، ولا كتالوج إنتاجي منشور أو رحلة تسجيل إنتاجية مختبرة بالمصادقة. لم يعد فحص حالة الجداول البعيدة، ولم ينفذ اختبار تزامن Slice 4.1 المضبوط بجلسَتين. الخطوة التالية Slice 7 closeout دون تنفيذ أعمالها في هذه الجولة.
+الصيغة المعتمدة للحالة النهائية:
+**Slice 7 operational closeout PASS ; Study Paths V1 implementation techniquement close ; production content/browser acceptance pending first reviewed scientific path.**
+
+تبقى الجداول المستضافة صفرية ونظيفة، والكتالوج العام فارغًا عمدًا حتى اعتماد ونشر أول مسار علمي حقيقي؛ وعندها فقط تكتمل رحلة قبول المتصفح الإنتاجية.
