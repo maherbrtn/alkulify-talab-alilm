@@ -1527,6 +1527,37 @@ assert.match(profilesSql, /function public\.handle_new_user\(\)/)
 assert.match(profilesSql, /trigger on_auth_user_created/)
 assert.doesNotMatch(profilesSql, /student_profiles/)
 
+// Global Supabase hardening: revokes public execute on handle_new_user and rls_auto_enable,
+// and aligns profiles policies with (select auth.uid()) = id without touching study paths.
+const globalHardeningSql = readFileSync(
+  new URL('../supabase/migrations/20260910000000_harden_global_supabase_security.sql', import.meta.url),
+  'utf8',
+)
+assert.match(
+  globalHardeningSql,
+  /revoke\s+execute\s+on\s+function\s+public\.handle_new_user\(\)\s+from\s+public,\s*anon,\s*authenticated,\s*service_role;/i,
+)
+assert.match(globalHardeningSql, /p\.proname\s*=\s*'rls_auto_enable'/)
+assert.match(
+  globalHardeningSql,
+  /execute\s+format\(\s*'revoke execute on function %s from public, anon, authenticated, service_role',\s*r\.fn_signature\s*\);/i,
+)
+assert.match(
+  globalHardeningSql,
+  /alter\s+policy\s+"profiles_select_own"\s+on\s+public\.profiles\s+using\s*\(\(select\s+auth\.uid\(\)\)\s*=\s*id\);/i,
+)
+assert.match(
+  globalHardeningSql,
+  /alter\s+policy\s+"profiles_insert_own"\s+on\s+public\.profiles\s+with\s+check\s*\(\(select\s+auth\.uid\(\)\)\s*=\s*id\);/i,
+)
+assert.match(
+  globalHardeningSql,
+  /alter\s+policy\s+"profiles_update_own"\s+on\s+public\.profiles\s+using\s*\(\(select\s+auth\.uid\(\)\)\s*=\s*id\)\s+with\s+check\s*\(\(select\s+auth\.uid\(\)\)\s*=\s*id\);/i,
+)
+assert.doesNotMatch(globalHardeningSql, /drop\s+table/i)
+assert.doesNotMatch(globalHardeningSql, /study_path/i)
+assert.doesNotMatch(globalHardeningSql, /lesson_progress/i)
+
 // Lesson progress is cloud-owned by the authenticated student and mutation is RPC-only.
 // Keep the checks deliberately structural: they catch permission or merge-invariant drift
 // without requiring a local Supabase service during the static application selfcheck.

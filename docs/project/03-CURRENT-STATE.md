@@ -1,7 +1,7 @@
 # الحالة الحالية
 
-آخر تحقق مستضاف وتشغيلي: `2026-09-09` على `develop` عند baseline `438cc02` (`docs: close my paths slice 6`).
-الحالة المعتمدة: **Slice 7 operational closeout PASS ; Study Paths V1 implementation techniquement close ; production content/browser acceptance pending first reviewed scientific path.**
+آخر دليل تحقق مستضاف مؤكد: اختبار Auth الوظيفي لتحصين Supabase بتاريخ `2026-09-12`؛ توثيق الإغلاق بتاريخ `2026-09-13` على `develop` عند baseline `7086665` (`docs: close study paths v1 operationally`).
+الحالة المعتمدة: **Supabase global hardening: HOSTED APPLIED AND VERIFIED / mini-slice terminée ; Slice 7 operational closeout PASS ; Study Paths V1 implementation techniquement close ; production content/browser acceptance pending first reviewed scientific path.**
 
 اكتملت جميع شرائح Study Paths V1 (من 1 إلى 7) تقنيًا وتشغيليًا. أثبت تحقق Slice 7 المستضاف على PostgreSQL `17.6` ومشروع `flrqmxxvdlwjutevefax` قيد الاستبعاد المؤجل في تزامن حقيقي بجلسَتين مستقلتين، ونجح مسبار النشر والتراجع (rollback)، واستقرت الجداول في حالة صفرية ونظيفة (`0` صفوف). تبقى رحلة التسجيل المتصفحية الإنتاجية الحقيقية معلقة حتى اعتماد ونشر أول مسار علمي مراجع في الكتالوج (`publicStudyPaths = []`).
 
@@ -17,8 +17,19 @@
   - استُبعدت المحاولتان الأوليتان كمسابر غير صالحة (الأولى لفشلها على `lifecycle_consistent`، والثانية لاستخدامها `session_replication_role=replica`). الاعتماد الحصري على الاختبار النهائي الصالح، وأعاد التنظيف النهائي الجداول للحالة الصفرية.
 - **مسبار النشر والتراجع (rollback) (Slice 7C):** مسار اصطناعي داخل معاملة: `before_count = 0`، ثم `INSERT` صالح في `study_path_versions`، ثم `ROLLBACK` صريح، و`after_rollback = 0`. لم تتبق أي بيانات اصطناعية.
 - **مراجعة الأمان والأداء:** لا توجد ملاحظات مانعة لمسارات الدراسة. RLS على `study_path_versions` بلا policies مقصود لحجب سجل النشر عن المتصفح، ودوال RPC بـ`SECURITY DEFINER` المتاحة لـ`authenticated` مقصودة وتمثل نموذج RPC-only. الفهرس `study_path_enrollments_superseded_by_idx` يُحتفظ به ولا يُحذف استنادًا لجدول فارغ مؤقتًا.
-- **ديون عامة خارج نطاق مسارات الدراسة:** رُصدت كديون سابقة تحال لتحصين منفصل: دوال `handle_new_user()` و`rls_auto_enable()` مكشوفة `EXECUTE` لدور `PUBLIC`، وحماية كلمات المرور المسربة في Auth معطلة، وسياسات `profiles` تعيد تقييم `auth.uid()` لكل صف.
+- **ديون عامة رُصدت آنذاك خارج نطاق مسارات الدراسة:** عولج لاحقًا تعرض `EXECUTE` لدالتي `handle_new_user()` و`rls_auto_enable()` وإعادة تقييم `auth.uid()` لكل صف في سياسات `profiles` عبر شريحة التحصين المكتملة أدناه؛ بقيت حماية كلمات المرور المسربة تحسينًا مستقبليًا غير مانع مشروطًا بخطة Pro أو أعلى.
 - **عقد التكامل المستقبلي مع Telegram / Corpus:** العقد الفاصل: `raw Telegram archive → transcription → LessonPart / lesson assembly → review → canonical corpus export → Product resolver → lesson_key stable`. الـcorpus مشروع منفصل؛ لا تدخل معرّفات Telegram أو YouTube أو corpus في جداول أو اشتقاقات المسارات، وتغيير المصدر تحت نفس الـ`lesson_key` لا ينشئ إصدار مسار جديد.
+
+## تحصين Supabase العام (Mini-Slice) — HOSTED APPLIED AND VERIFIED / مكتملة
+
+طُبقت بنجاح الـmigration الموجودة `20260910000000_harden_global_supabase_security.sql` على المشروع `flrqmxxvdlwjutevefax`، وتطابق تاريخ migrations المحلي والبعيد حتى `20260910000000`. الأدلة التالية أكدها صاحب المشروع، وتفاصيل الإغلاق في `docs/project/plans/07-supabase-global-hardening.md`:
+
+- **صلاحيات الدوال:** بقي `EXECUTE` لـ`postgres` وحده على `public.handle_new_user()` و`public.rls_auto_enable()`؛ أزيل من `PUBLIC`, `anon`, `authenticated`, `service_role`. بقيت `handle_new_user()` دالة `SECURITY DEFINER`، وزالت تنبيهات Advisors المعنية بالدالتين.
+- **سياسات `profiles`:** ثبت أن `profiles_select_own` و`profiles_insert_own` و`profiles_update_own` تستخدم الصيغة المحسنة المكافئة لـ`(select auth.uid()) = id`؛ اختفى تحذير `auth_rls_initplan` على `profiles`.
+- **اختبار Auth الحقيقي (`2026-09-12`):** بقي trigger `on_auth_user_created` موجودًا؛ أُنشئ مستخدم مؤقت من Supabase Dashboard وأثبت استعلام SQL أن `profile_created = true` مع تقارب `user_created_at` و`profile_created_at`. ثبت استمرار `auth.users → on_auth_user_created → handle_new_user() → public.profiles` بعد سحب `EXECUTE`، ثم حُذف مستخدم الاختبار.
+- **Leaked Password Protection — future Pro-only improvement / non-blocking:** ما زالت معطلة وغير متاحة على خطة المشروع الحالية Free؛ تتاح على Pro أو أعلى وفق [توثيق Supabase](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection). تفعيلها تحسين مستقبلي عند انتقال اختياري إلى خطة مؤهلة، وليس خطوة مطلوبة أو عائقًا لإغلاق الشريحة.
+- **Findings متبقية غير مانعة:** RLS بلا policy على `study_path_versions` مقصود؛ RPCs الخاصة بـStudy Paths ذات `SECURITY DEFINER` والمتاحة لـ`authenticated` مقصودة؛ الفهرس `study_path_enrollments_superseded_by_idx` غير المستخدم حاليًا يُحتفظ به.
+- **حدود الإغلاق:** الشريحة مطبقة ومحققة مستضافًا. تحديث الوثائق محلي اعتمادًا على الأدلة المؤكدة، دون إعادة تطبيق أو إجراء تغيير على Supabase المستضاف، ودون مساس بوظائف Study Paths أو الـmigrations القديمة.
 
 ## يعمل الآن
 
@@ -34,7 +45,7 @@
 - اكتملت Study Paths Slice 3V محليًا ومستضافًا: registry بالحقول الخمسة الدنيا وPK على `(path_id, version)`، وRLS مفعل بلا policies، ولا privileges لـ`anon` أو `authenticated`، و`service_role` يملك `SELECT` فقط. ثبتت القيود وimmutability وretirement أحادي الاتجاه ورفض الحذف باختبارات transaction مستضافة، وبقي registry فارغًا بلا بيانات صناعية.
 - اكتملت Study Paths Slice 4 محليًا ومستضافًا بالمigration `20260903164705`: تسجيل الطالب مثبت على إصدار وبحالات `active | paused | withdrawn | superseded`، وRLS قراءة للمالك فقط، وبلا كتابة مباشرة للمتصفح. ثبتت فعليًا RPCs الـenroll/pause/resume/withdraw/upgrade، وعزل المالك والأدوار، والانتقالات والـidempotency والretirement وتعدد المسارات النشطة، مع rollback لكل البيانات الصناعية.
 - التحقق المستضاف السابق أثبت Auth وprofile trigger وعزل RLS بين مستخدمين وRPC والقيود ومزامنة Player؛ ليس قبولًا جديدًا للوحة My Paths.
-- في آخر تحقق مستضاف كان تاريخ migrations المحلي والبعيد متطابقًا للإصدارات `20260824000000`، `20260826000000`، `20260829000000`، `20260902000000`، `20260903164705`، و`20260904195919`؛ وكان `authenticated` يملك على `profiles` فقط `SELECT/INSERT/UPDATE`. لم تعد هذه القراءات في Slice 6C.
+- تاريخ migrations المحلي والبعيد متطابق حتى `20260910000000` بعد تطبيق التحصين العام. أثبت التحقق السابق أن `authenticated` يملك على `profiles` فقط `SELECT/INSERT/UPDATE`؛ لا تعدل migration التحصين الجديدة هذه المنح.
 - مزامنة upstream مكتملة حتى `d3ee5dc` عبر فرع `integrate/haitham-2026-09-04` وcommit التكامل `c26d118 merge: sync upstream view transitions`؛ دخل commitا هيثم `581ff88` و`d3ee5dc` بلا تعارضات، ونجحت بوابات التحقق وGitHub Actions run `33917124878`.
 - اكتملت Slice 5A–5D محليًا: خدمة سحابية موجودة بـRPCs الخمس وصفحة طالب مثبتة الإصدار، وإجراءات enroll/pause/resume/withdraw، وسجل مملوك للمسار وترقية صريحة للأمام مع معاينة المنهج وتقدم الهدف. يفصل `student-study-path-controller.ts` auth والأجيال وقفل mutation عن العرض.
 - يطابق `?enrollment=` صفًا من قراءة المالك للمسار فقط؛ المدخل غير الصالح أو المجهول يفشل مغلقًا، والتاريخ withdrawn/superseded للقراءة مع تقدم الدروس الحالي بحسب المنهج المثبت، لا snapshot عند الإنهاء. يمسح تغيير الحساب التحديد والتاريخ السابقين.
@@ -56,11 +67,10 @@
 
 ## الخطوة التالية
 
-الخطوة التالية بعد إغلاق Slice 7 التشغيلي هي إعداد ومراجعة أول مسار علمي حقيقي ونشره لاختبار رحلة My Paths الإنتاجية المتكاملة في المتصفح بحساب مصادق عليه. يلي ذلك في مسار منفصل مهمة تحصين لـSupabase لمعالجة الديون العامة المرصودة (صلاحيات الدوال العامة، وتفعيل leaked-password protection، وسياسات profiles).
+الخطوة التالية بعد إغلاق Slice 7 التشغيلي وشريحة تحصين Supabase المطبقة والمحققة مستضافًا هي إعداد ومراجعة أول مسار علمي حقيقي ونشره لاختبار رحلة My Paths الإنتاجية المتكاملة في المتصفح بحساب مصادق عليه. لا توجد خطوة hosted متبقية في شريحة التحصين؛ تبقى Leaked Password Protection تحسينًا منفصلًا مشروطًا بانتقال مستقبلي إلى Pro أو أعلى.
 
 ## عوائق ومخاطر نشطة
 
-- ديون عامة في Supabase مرصودة أثناء مراجعة Slice 7 وخارج نطاق مسارات الدراسة: دوال `handle_new_user()` و`rls_auto_enable()` مكشوفة `EXECUTE` لدور `PUBLIC`؛ خاصية leaked-password protection في Auth معطلة؛ وسياسات جدول `profiles` تعيد تقييم `auth.uid()` لكل صف في البيئة المستضافة. تحتاج لتحصين منفصل.
 - حفظ أكبر موضع لا يمثل الرجوع المقصود أو إعادة الدراسة.
 - قد يبقى ظل `localStorage` أحدث قليلًا من Supabase بعد `pagehide`، وهو غير مفصول حاليًا حسب المستخدم في المتصفح المشترك.
 - ACL `service_role` على `profiles` غير معتاد لكنه سابق لـ02V ولم يتغير، والتطبيق لا يستخدمه في المتصفح.
