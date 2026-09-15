@@ -1,4 +1,5 @@
 import { lessonRegistry, videoByLessonKey, type Video } from './data'
+import sharhThalathatAlUsul from './study-path-definitions/sharh-thalathat-al-usul.json'
 import {
   validateStudyPathDefinition,
   type StudyPathDefinition,
@@ -110,7 +111,7 @@ export function createPublicStudyPathCatalog(
 
 // Add reviewed, scholarly definitions here only after they are genuinely publishable.
 // The technical draft fixture deliberately never enters this public source list.
-export const publicStudyPathDefinitions: readonly unknown[] = []
+export const publicStudyPathDefinitions: readonly unknown[] = [sharhThalathatAlUsul]
 
 export const publicStudyPaths = createPublicStudyPathCatalog(publicStudyPathDefinitions)
 

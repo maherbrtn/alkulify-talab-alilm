@@ -1,9 +1,9 @@
 # الحالة الحالية
 
 آخر دليل تحقق مستضاف مؤكد: اختبار Auth الوظيفي لتحصين Supabase بتاريخ `2026-09-12`؛ توثيق الإغلاق بتاريخ `2026-09-13` على `develop` عند baseline `7086665` (`docs: close study paths v1 operationally`).
-الحالة المعتمدة: **Supabase global hardening: HOSTED APPLIED AND VERIFIED / mini-slice terminée ; Slice 7 operational closeout PASS ; Study Paths V1 implementation techniquement close ; production content/browser acceptance pending first reviewed scientific path.**
+الحالة المعتمدة: **Supabase global hardening: HOSTED APPLIED AND VERIFIED / mini-slice terminée ; Slice 7 operational closeout PASS ; Study Paths V1 implementation techniquement close ; first reviewed scientific path present in local public catalog ; hosted publication registry insertion and authenticated production browser acceptance pending.**
 
-اكتملت جميع شرائح Study Paths V1 (من 1 إلى 7) تقنيًا وتشغيليًا. أثبت تحقق Slice 7 المستضاف على PostgreSQL `17.6` ومشروع `flrqmxxvdlwjutevefax` قيد الاستبعاد المؤجل في تزامن حقيقي بجلسَتين مستقلتين، ونجح مسبار النشر والتراجع (rollback)، واستقرت الجداول في حالة صفرية ونظيفة (`0` صفوف). تبقى رحلة التسجيل المتصفحية الإنتاجية الحقيقية معلقة حتى اعتماد ونشر أول مسار علمي مراجع في الكتالوج (`publicStudyPaths = []`).
+اكتملت جميع شرائح Study Paths V1 (من 1 إلى 7) تقنيًا وتشغيليًا. أثبت تحقق Slice 7 المستضاف على PostgreSQL `17.6` ومشروع `flrqmxxvdlwjutevefax` قيد الاستبعاد المؤجل في تزامن حقيقي بجلسَتين مستقلتين، ونجح مسبار النشر والتراجع (rollback)، واستقرت الجداول في حالة صفرية ونظيفة (`0` صفوف). أُضيف محليًا أول مسار علمي مراجع، «شرح ثلاثة الأصول»، إلى `publicStudyPaths` بحالة `published` وإصدار 1، بأربع وحدات وسبعة دروس. تبقى إضافة سجل نشره إلى المستضاف ونشر بناء الموقع وقبول رحلة التسجيل الإنتاجية في متصفح مصادق عليه معلقة؛ لم تُجر هذه المهمة أي اتصال أو كتابة مستضافة.
 
 ## Slice 7 — HOSTED OPERATIONAL CLOSEOUT AND CONCURRENCY VERIFICATION
 
@@ -41,7 +41,7 @@
 - المفاتيح المجهولة/القديمة تبقى مخزنة بلا mutation، وتُستبعد من بطاقات الدروس مع إشعار محايد واحد. يملك `deriveStudentProgress()` دلالات العرض والاستئناف، بينما يبقى Player مسؤولًا عن حفظ التقدم والمصالحة المحلية/السحابية الحالية.
 - اكتملت Study Paths Slice 1 كنموذج مجال static ونقي: تعريفات مسارات ذات إصدارات، ووحدات ودروس مطلوبة مرتبة بـ`lesson_key`، مع UUID v4 canonical lowercase وvalidation صارم وحل المفاتيح عبر registry، وcanonical serialization وSHA-256 digest يغطيان بنية المنهج المهمة ولا يشملان metadata العرض.
 - يشتق `deriveStudyPathProgress()` اكتمال الدرس والوحدة والمسار والنسب وContinue الخاص بالمسار من `lesson_progress.completed` وترتيب الإصدار فقط، ويعيد استخدام resume الحالي. يحتسب التقدم السابق والمفتاح المشترك لأي مسار يحتويه بلا نسخ حالة تقدم، ويعيد snapshots مجمدة لصفوف التقدم بدل مراجع mutable يملكها المستدعي.
-- اكتملت Study Paths Slice 2 محليًا: كتالوج عام static لا يقبل إلا تعريفًا حالته `published`، وحل build-time من `lesson_key` إلى route الدرس الحالية، وفهرس وقوالب current/history عامة لا تستورد Auth أو Supabase. الكتالوج فارغ عمدًا حتى ينشر منهج علمي حقيقي؛ fixture التقني draft غير مكشوف كمسار إنتاجي.
+- اكتملت Study Paths Slice 2 محليًا: كتالوج عام static لا يقبل إلا تعريفًا حالته `published`، وحل build-time من `lesson_key` إلى route الدرس الحالية، وفهرس وقوالب current/history عامة لا تستورد Auth أو Supabase. يضم الكتالوج المحلي الآن «شرح ثلاثة الأصول» وحده، بالـslug `sharh-thalathat-al-usul`، وتوزيع الدروس 3 / 2 / 1 / 1 وفق مراجعة صاحب المشروع؛ fixture التقني يبقى draft وغير مكشوف كمسار إنتاجي.
 - اكتملت Study Paths Slice 3V محليًا ومستضافًا: registry بالحقول الخمسة الدنيا وPK على `(path_id, version)`، وRLS مفعل بلا policies، ولا privileges لـ`anon` أو `authenticated`، و`service_role` يملك `SELECT` فقط. ثبتت القيود وimmutability وretirement أحادي الاتجاه ورفض الحذف باختبارات transaction مستضافة، وبقي registry فارغًا بلا بيانات صناعية.
 - اكتملت Study Paths Slice 4 محليًا ومستضافًا بالمigration `20260903164705`: تسجيل الطالب مثبت على إصدار وبحالات `active | paused | withdrawn | superseded`، وRLS قراءة للمالك فقط، وبلا كتابة مباشرة للمتصفح. ثبتت فعليًا RPCs الـenroll/pause/resume/withdraw/upgrade، وعزل المالك والأدوار، والانتقالات والـidempotency والretirement وتعدد المسارات النشطة، مع rollback لكل البيانات الصناعية.
 - التحقق المستضاف السابق أثبت Auth وprofile trigger وعزل RLS بين مستخدمين وRPC والقيود ومزامنة Player؛ ليس قبولًا جديدًا للوحة My Paths.
@@ -61,13 +61,13 @@
 ## جزئي أو غير موجود
 
 - لا تشمل لوحة مساحة الطالب ملاحظات أو محفوظات سحابية أو نسبة تقدم عامة للأرشيف أو دلالات reset/rewatch؛ «مساراتي» وصفحة المسار الخاص منفذتان.
-- لا يوجد مسار علمي منشور فعليًا؛ كتالوج `publicStudyPaths` فارغ عمدًا، لذلك لا يولد البناء صفحة مسار تفصيلية إنتاجية لرحلة تسجيل My Paths حقيقية. الـfixture تقني draft، والاختبارات تستخدم مناهج داخل الذاكرة. ترك مسبار النشر واختبار التزامن في Slice 7 جدولي النشر والتسجيل فارغين ونظيفين؛ تبقى رحلة تسجيل My Paths الإنتاجية معلقة بنشر أول مسار علمي مراجع.
+- تعريف «شرح ثلاثة الأصول» منشور في الكتالوج المحلي فقط. سجل `study_path_versions` المستضاف لهذا التعريف لم يُدرج في هذه المهمة، ولم يُنشر البناء أو يُجر قبول My Paths الإنتاجي بالمصادقة. يولد البناء المحلي صفحة `/study-paths/sharh-thalathat-al-usul/` وصفحة الطالب المقابلة؛ نجاح الاختبارات المحلية ليس قبولًا إنتاجيًا. حالة الجداول الصفرية المذكورة أعلاه هي آخر دليل مستضاف سابق، وليست قراءة جديدة.
 - لا توجد توصيات لمسارات الدراسة، ولا ينفذ هذا المستودع ingestion أو corpus خاصًا بـTelegram ضمن الميزة.
 - لا توجد Ask AI أو RAG؛ البحث الدلالي استرجاع فقط.
 
 ## الخطوة التالية
 
-الخطوة التالية بعد إغلاق Slice 7 التشغيلي وشريحة تحصين Supabase المطبقة والمحققة مستضافًا هي إعداد ومراجعة أول مسار علمي حقيقي ونشره لاختبار رحلة My Paths الإنتاجية المتكاملة في المتصفح بحساب مصادق عليه. لا توجد خطوة hosted متبقية في شريحة التحصين؛ تبقى Leaked Password Protection تحسينًا منفصلًا مشروطًا بانتقال مستقبلي إلى Pro أو أعلى.
+الخطوة التالية بعد إضافة أول منهج مراجع محليًا هي إدخال صف نشر الإصدار 1 في `study_path_versions` عبر مسار النشر الإداري المعتمد، مطابقًا للهوية والـdigest وtimestamp في manifest المحلي، ثم التحقق بـ`pnpm verify:study-path-publications` ونشر بناء الموقع وإجراء قبول رحلة My Paths الإنتاجية في المتصفح بحساب مصادق عليه. تفاصيل التعريف وحدود التحقق المحلي في `06-STUDY-PATHS.md` وخطة `plans/08-first-reviewed-study-path.md`. لا يُقبل تسجيل هذا الإصدار قبل وجود صف النشر المطابق. لا توجد خطوة hosted متبقية في شريحة التحصين؛ تبقى Leaked Password Protection تحسينًا منفصلًا مشروطًا بانتقال مستقبلي إلى Pro أو أعلى.
 
 ## عوائق ومخاطر نشطة
 

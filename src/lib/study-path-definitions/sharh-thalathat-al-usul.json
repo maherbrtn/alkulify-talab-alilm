@@ -1,0 +1,77 @@
+{
+  "pathId": "e17f26d2-2a38-40af-9984-2af8ec45ba43",
+  "slug": "sharh-thalathat-al-usul",
+  "title": "شرح ثلاثة الأصول",
+  "description": "مسار دراسي مرتب لشرح متن ثلاثة الأصول للإمام محمد بن عبد الوهاب، في سبعة مجالس متتابعة.",
+  "status": "published",
+  "currentVersion": 1,
+  "versions": [
+    {
+      "pathId": "e17f26d2-2a38-40af-9984-2af8ec45ba43",
+      "version": 1,
+      "publishedAt": "2026-09-14T16:36:21.235Z",
+      "modules": [
+        {
+          "moduleKey": "5beb90b1-86c0-414a-ade4-ef42c39f2320",
+          "title": "المقدمات والمسائل التمهيدية",
+          "objective": "دراسة المقدمات والمسائل التمهيدية التي يفتتح بها متن ثلاثة الأصول.",
+          "position": 1,
+          "lessons": [
+            {
+              "lessonKey": "79a6bed0-d148-41b5-ae7f-e282cafa7310",
+              "position": 1
+            },
+            {
+              "lessonKey": "6bdb9e91-b92a-4f12-8b7f-d8674b9f091e",
+              "position": 2
+            },
+            {
+              "lessonKey": "c243f814-4609-4686-aa60-cbb842d856e4",
+              "position": 3
+            }
+          ]
+        },
+        {
+          "moduleKey": "2748f8c8-cfc5-4743-9303-d71aa397666c",
+          "title": "الحنيفية والعبادة ومعرفة الرب",
+          "objective": "دراسة معنى الحنيفية وأصول العبادة وما يتعلق بمعرفة العبد ربه.",
+          "position": 2,
+          "lessons": [
+            {
+              "lessonKey": "e23b813a-fef7-4029-ba40-a33c0bbaf44e",
+              "position": 1
+            },
+            {
+              "lessonKey": "2ebce0b4-fdf0-4d46-9aa0-2c13ad50533e",
+              "position": 2
+            }
+          ]
+        },
+        {
+          "moduleKey": "f7dcb81f-31e6-4eae-9da8-3c8376b7f07d",
+          "title": "الأصل الثاني: معرفة دين الإسلام",
+          "objective": "دراسة الأصل الثاني من الأصول الثلاثة: معرفة دين الإسلام بالأدلة.",
+          "position": 3,
+          "lessons": [
+            {
+              "lessonKey": "6e7d25f7-d691-420c-b394-ec4a51096c11",
+              "position": 1
+            }
+          ]
+        },
+        {
+          "moduleKey": "a8774a31-2bac-4017-9426-60de2f3a5ca7",
+          "title": "الأصل الثالث: معرفة النبي ﷺ",
+          "objective": "دراسة الأصل الثالث: معرفة النبي محمد ﷺ، وإتمام شرح المتن.",
+          "position": 4,
+          "lessons": [
+            {
+              "lessonKey": "557006c1-6fac-4f00-bd57-ab48d3441c84",
+              "position": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

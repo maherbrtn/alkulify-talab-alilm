@@ -44,6 +44,7 @@ import {
   historicalStudyPathHref,
   publicStudyPathBySlug,
   publicStudyPathCurrentRouteEntries,
+  publicStudyPathDefinitions,
   publicStudyPathHistoricalRouteEntries,
   publicStudyPathVersion,
   publicStudyPaths,
@@ -549,7 +550,103 @@ assert.doesNotThrow(() => validateStudyPathVersionLessonKeys(studyPathVersion, r
 // Slice 2 publishes only reviewed definitions. The technical draft must fail closed instead of
 // becoming a production-looking course, while a synthesized published definition exercises the
 // build-time catalog and route resolvers without entering the real public catalog.
-assert.equal(publicStudyPaths.length, 0)
+const firstReviewedPathId = 'e17f26d2-2a38-40af-9984-2af8ec45ba43'
+const firstReviewedSlug = 'sharh-thalathat-al-usul'
+const firstReviewedPublishedAt = '2026-09-14T16:36:21.235Z'
+const firstReviewedDigest = '2374ced4629fcafdb1be830231e2eab647d3d7394f167453f68fe1252fc34afb'
+const firstReviewedLessonKeys = [
+  '79a6bed0-d148-41b5-ae7f-e282cafa7310',
+  '6bdb9e91-b92a-4f12-8b7f-d8674b9f091e',
+  'c243f814-4609-4686-aa60-cbb842d856e4',
+  'e23b813a-fef7-4029-ba40-a33c0bbaf44e',
+  '2ebce0b4-fdf0-4d46-9aa0-2c13ad50533e',
+  '6e7d25f7-d691-420c-b394-ec4a51096c11',
+  '557006c1-6fac-4f00-bd57-ab48d3441c84',
+]
+assert.equal(publicStudyPathDefinitions.length, 1)
+const firstReviewedDefinition = validateStudyPathDefinition(publicStudyPathDefinitions[0], registry)
+assert.equal(firstReviewedDefinition.pathId, firstReviewedPathId)
+assert.equal(firstReviewedDefinition.status, 'published')
+assert.deepEqual(publicStudyPaths.map((path) => path.pathId), [firstReviewedPathId])
+const firstReviewedPath = publicStudyPathBySlug(firstReviewedSlug)!
+assert.equal(firstReviewedPath, publicStudyPaths[0])
+assert.equal(firstReviewedPath.title, 'شرح ثلاثة الأصول')
+assert.equal(
+  firstReviewedPath.description,
+  'مسار دراسي مرتب لشرح متن ثلاثة الأصول للإمام محمد بن عبد الوهاب، في سبعة مجالس متتابعة.',
+)
+assert.equal(firstReviewedPath.status, 'published')
+assert.equal(firstReviewedPath.currentVersion, 1)
+assert.equal(firstReviewedPath.current.version, 1)
+assert.equal(firstReviewedPath.versions.length, 1)
+assert.equal(firstReviewedPath.current, publicStudyPathVersion(firstReviewedSlug, 1))
+assert.equal(publicStudyPathVersion(firstReviewedSlug, 2), undefined)
+assert.equal(firstReviewedPath.current.publishedAt, firstReviewedPublishedAt)
+assert.equal(new Date(firstReviewedPublishedAt).toISOString(), firstReviewedPublishedAt)
+assert.equal(firstReviewedPath.current.modules.length, 4)
+assert.equal(firstReviewedPath.lessonCount, 7)
+assert.deepEqual(firstReviewedPath.current.modules.map((module) => module.moduleKey), [
+  '5beb90b1-86c0-414a-ade4-ef42c39f2320',
+  '2748f8c8-cfc5-4743-9303-d71aa397666c',
+  'f7dcb81f-31e6-4eae-9da8-3c8376b7f07d',
+  'a8774a31-2bac-4017-9426-60de2f3a5ca7',
+])
+assert.deepEqual(firstReviewedPath.current.modules.map((module) => module.position), [1, 2, 3, 4])
+assert.deepEqual(
+  firstReviewedPath.current.modules.map((module) => module.lessons.map((lesson) => lesson.lessonKey)),
+  [firstReviewedLessonKeys.slice(0, 3), firstReviewedLessonKeys.slice(3, 5),
+    firstReviewedLessonKeys.slice(5, 6), firstReviewedLessonKeys.slice(6)],
+)
+const firstReviewedLessons = firstReviewedPath.current.modules.flatMap((module) => module.lessons)
+assert.deepEqual(firstReviewedLessons.map((lesson) => lesson.lessonKey), firstReviewedLessonKeys)
+for (const lesson of firstReviewedLessons) {
+  const video = videos.find((item) => item.lessonKey === lesson.lessonKey)
+  assert.ok(video, `reviewed lesson must resolve to a public video: ${lesson.lessonKey}`)
+  assert.equal(lesson.href, `/v/${video.id}/`)
+  assert.match(lesson.href, /^\/v\/[A-Za-z0-9_-]+\/$/)
+  assert.equal(lesson.title, video.title)
+}
+assert.equal(currentStudyPathHref(firstReviewedSlug), '/study-paths/sharh-thalathat-al-usul/')
+assert.deepEqual(publicStudyPathCurrentRouteEntries(), [
+  { params: { slug: firstReviewedSlug }, props: { path: firstReviewedPath } },
+])
+assert.deepEqual(publicStudyPathHistoricalRouteEntries(), [])
+assert.equal(publicStudyPathBySlug(studyPathFixtureDraft.slug), undefined)
+assert.equal(publicStudyPathBySlug('unknown-path'), undefined)
+const fixtureIdentities = new Set([
+  studyPathFixtureDraft.pathId,
+  ...studyPathFixtureDraft.versions.flatMap((version) => version.modules.map((module) => module.moduleKey)),
+])
+const firstReviewedIdentities = [
+  firstReviewedPathId,
+  ...firstReviewedPath.current.modules.map((module) => module.moduleKey),
+]
+assert.equal(new Set(firstReviewedIdentities).size, 5)
+assert.ok(firstReviewedIdentities.every((key) => !fixtureIdentities.has(key)))
+assert.doesNotMatch(
+  JSON.stringify(publicStudyPathDefinitions),
+  /youtube|telegram|corpus|provider|videoId/i,
+)
+const firstReviewedManifest = await createPublicStudyPathPublicationManifest()
+assert.deepEqual(firstReviewedManifest, [{
+  path_id: firstReviewedPathId,
+  version: 1,
+  definition_digest: firstReviewedDigest,
+  published_at: firstReviewedPublishedAt,
+}])
+assert.match(firstReviewedManifest[0].definition_digest, /^[0-9a-f]{64}$/)
+assert.equal(await studyPathVersionDigest(firstReviewedDefinition.versions[0]), firstReviewedDigest)
+assert.equal(
+  createHash('sha256').update(canonicalStudyPathVersion(firstReviewedDefinition.versions[0])).digest('hex'),
+  firstReviewedDigest,
+)
+// A local projection passes; an empty registry correctly remains missing until hosted publication.
+assert.doesNotThrow(() => assertStudyPathPublicationRegistry(
+  firstReviewedManifest, firstReviewedManifest.map((row) => ({ ...row, retired_at: null })),
+))
+assert.deepEqual(verifyStudyPathPublicationRegistry(firstReviewedManifest, []), [
+  { code: 'missing', identity: `${firstReviewedPathId}/1` },
+])
 assert.throws(
   () => createPublicStudyPathCatalog([studyPathFixtureDraft]),
   /only published study paths can enter the public catalog/,
@@ -570,7 +667,7 @@ const publicStudyPathFixture = {
 }
 const publicFixtureCatalog = createPublicStudyPathCatalog([publicStudyPathFixture])
 const publicationManifest = await createStudyPathPublicationManifest([publicStudyPathFixture])
-assert.deepEqual(await createPublicStudyPathPublicationManifest(), [])
+assert.deepEqual(await createPublicStudyPathPublicationManifest(), firstReviewedManifest)
 assert.equal(publicationManifest.length, publicStudyPathFixture.versions.length)
 assert.ok(publicationManifest.every((publication) => /^[0-9a-f]{64}$/.test(publication.definition_digest)))
 assert.deepEqual(
@@ -2694,7 +2791,7 @@ for (const filename of ['student-study-path.ts', 'student-study-path-cloud.ts'])
   assert.doesNotMatch(source, /\.insert\s*\(|\.update\s*\(|\.delete\s*\(|\.upsert\s*\(/)
   assert.doesNotMatch(source, /localStorage|sessionStorage|merge_lesson_progress['"]\s*,|youtube|telegram|providerId|corpusId/i)
 }
-assert.deepEqual(publicStudyPaths, [])
+assert.deepEqual(publicStudyPaths, [firstReviewedPath])
 
 // Slice 5B: private route props, read-only rendering and auth/read race boundaries.
 const { observeStudentStudyPath, studentStudyPathPageProps, StudentStudyPathView } =
@@ -3565,7 +3662,7 @@ for (const filename of ['../src/lib/student-study-path-controller.ts', '../src/i
   assert.doesNotMatch(source, /\.(from|rpc|insert|update|delete|upsert)\s*\(/)
   assert.doesNotMatch(source, /localStorage|sessionStorage|merge_lesson_progress|youtube|telegram|providerId|corpusId/i)
 }
-assert.deepEqual(publicStudyPaths, [])
+assert.deepEqual(publicStudyPaths, [firstReviewedPath])
 // A late commit is reconciled before a new explicit intent can replace the old one.
 for (const nextAction of ['upgrade', 'pause'] as const) {
   const { h, reader } = harness5C([active5A], { enrollmentId: active5A.id })
@@ -3824,7 +3921,7 @@ assert.doesNotMatch(myPathsSource6A, /student-progress-cloud|student-home-contro
 assert.doesNotMatch(myPathsSource6A, /studyPathEnrollmentActions|studyPathUpgrade|merge_lesson_progress/)
 assert.match(myPathsSource6A, /partitionStudyPathEnrollments\(group, pathId\)/)
 assert.match(myPathsSource6A, /deriveStudentStudyPath\(/)
-assert.deepEqual(publicStudyPaths, [])
+assert.deepEqual(publicStudyPaths, [firstReviewedPath])
 // Slice 6B: independent dashboard branches, verified auth, and presentational rendering.
 const { observeStudentHome } = await import('../src/lib/student-home-controller.ts')
 const { StudentHomeView } = await import('../src/islands/StudentHome.tsx')
@@ -4362,5 +4459,5 @@ for (const source of [studentHomeSource, pathsSource6B, controllerSource6B]) {
   assert.doesNotMatch(source, /node:|['"]\.\.?\/[^'"]*(?:public-study-paths|\/data)['"]|readFile|data-loader/)
   assert.doesNotMatch(source, /primaryPath|focusedPath|overallProgress|totalProgress|studyPathEnrollmentActions|studyPathUpgrade/)
 }
-assert.deepEqual(publicStudyPaths, [])
+assert.deepEqual(publicStudyPaths, [firstReviewedPath])
 console.log('selfcheck ok')
